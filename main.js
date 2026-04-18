@@ -2727,6 +2727,7 @@ function updatePolice(npc, dt) {
 function updatePoliceBoss(npc, dt) {
   const distance = distanceBetween(npc.x, npc.y, state.player.x, state.player.y);
   const touchingSwarm = getNpcSwarmContact(npc);
+  const directBodyContact = distance <= npc.radius + state.player.radius + 10;
   const seesPlayer = canSeePlayer(npc, CONFIG.policeBossVision);
 
   npc.radius = 12;
@@ -2738,16 +2739,22 @@ function updatePoliceBoss(npc, dt) {
   npc.disengageTimer = Math.max(0, npc.disengageTimer - dt);
   npc.reinforcementCooldown = Math.max(0, (npc.reinforcementCooldown || 0) - dt);
 
-  if (touchingSwarm) {
-    const crushDamage = (9.5 + touchingSwarm.touchCount * 2.2 + Math.sqrt(state.player.followers.length + 1) * 0.12) * dt;
+  if (touchingSwarm || directBodyContact) {
+    const touchCount = touchingSwarm ? touchingSwarm.touchCount : 1;
+    const crushDamage = (
+      10.5 +
+      touchCount * 2.2 +
+      Math.sqrt(state.player.followers.length + 1) * 0.12 +
+      (directBodyContact ? 8.5 : 0)
+    ) * dt;
     npc.health = Math.max(0, npc.health - crushDamage);
     const awayX = npc.x - state.player.x;
     const awayY = npc.y - state.player.y;
     const awayDistance = Math.hypot(awayX, awayY) || 0.0001;
-    npc.vx += (awayX / awayDistance) * (5.8 + touchingSwarm.touchCount * 0.85);
-    npc.vy += (awayY / awayDistance) * (5.8 + touchingSwarm.touchCount * 0.85);
-    npc.x += (awayX / awayDistance) * 18;
-    npc.y += (awayY / awayDistance) * 18;
+    npc.vx += (awayX / awayDistance) * (6.8 + touchCount * 0.95 + (directBodyContact ? 1.2 : 0));
+    npc.vy += (awayY / awayDistance) * (6.8 + touchCount * 0.95 + (directBodyContact ? 1.2 : 0));
+    npc.x += (awayX / awayDistance) * (22 + (directBodyContact ? 6 : 0));
+    npc.y += (awayY / awayDistance) * (22 + (directBodyContact ? 6 : 0));
     spawnBloodStamp(npc.x, npc.y, 2.2, 1, npc.vx * 0.45, npc.vy * 0.45);
     npc.disengageTimer = Math.max(npc.disengageTimer, CONFIG.policeBossDisengageTime + 2.4);
     if (npc.health <= 0) {
