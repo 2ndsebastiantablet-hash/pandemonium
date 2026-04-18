@@ -10,7 +10,7 @@ const CONFIG = {
   policeBossVision: 620,
   policeBossSpawnConsumed: 50,
   policeBossSpawnKills: 20,
-  policeBossHealth: 185,
+  policeBossHealth: 160,
   policeBossSearchSpeed: 8.8,
   policeBossMotorcycleSpeed: 10.6,
   policeBossDesiredRange: 325,
