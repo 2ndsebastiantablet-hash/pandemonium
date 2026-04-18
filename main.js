@@ -7,6 +7,18 @@ const CONFIG = {
   policeVision: 360,
   policeGunRange: 165,
   policeDesiredRange: 190,
+  policeBossVision: 620,
+  policeBossSpawnConsumed: 50,
+  policeBossSpawnKills: 20,
+  policeBossHealth: 185,
+  policeBossSearchSpeed: 4.3,
+  policeBossMotorcycleSpeed: 5.25,
+  policeBossDesiredRange: 255,
+  policeBossTooCloseRange: 130,
+  policeBossDisengageTime: 4.8,
+  policeBossShotCooldown: 5,
+  policeBossShotgunPellets: 5,
+  policeBossPelletDamage: 10,
   civilianSpeed: 0.8,
   civilianFleeSpeed: 2.25,
   policePatrolSpeed: 1.15,
@@ -147,6 +159,8 @@ const state = {
     ciaSpawnCooldown: 0,
     alienSpawnCooldown: 0,
     playerSlowFactor: 1,
+    policeDeathsTotal: 0,
+    policeBossSpawned: false,
   },
   audio: {
     ctx: null,
@@ -184,6 +198,7 @@ const SANDBOX_STRUCTURE_OPTIONS = [
 const SANDBOX_ENEMY_OPTIONS = [
   { id: "police", label: "Police Officer" },
   { id: "policeSquad", label: "Police Squad" },
+  { id: "policeBoss", label: "Police Mini Boss" },
   { id: "militarySoldier", label: "Army Soldier" },
   { id: "militaryGrenadier", label: "Grenade Soldier" },
   { id: "tank", label: "Tank" },
@@ -1365,6 +1380,20 @@ function desiredPoliceCount() {
   return Math.min(12, sizePressure + alertPressure + (state.player.absorbedHumans >= 3 ? 1 : 0));
 }
 
+function shouldSpawnPoliceBoss() {
+  if (state.world.policeBossSpawned) {
+    return false;
+  }
+  return (
+    state.player.absorbedHumans >= CONFIG.policeBossSpawnConsumed ||
+    state.world.policeDeathsTotal >= CONFIG.policeBossSpawnKills
+  );
+}
+
+function hasPoliceBoss() {
+  return state.world.npcs.some((npc) => npc.type === "policeBoss" && npc.alive);
+}
+
 function desiredMilitaryCounts() {
   const size = state.player.absorbedHumans;
   return {
@@ -1397,6 +1426,37 @@ function countNpcsByType(type) {
 
 function countSquadsByType(type) {
   return new Set(state.world.npcs.filter((npc) => npc.type === type).map((npc) => npc.squadId)).size;
+}
+
+function createPoliceBossNpc(spawnPoint, rng) {
+  return {
+    id: state.world.nextNpcId,
+    type: "policeBoss",
+    x: spawnPoint.x,
+    y: spawnPoint.y,
+    vx: 0,
+    vy: 0,
+    radius: 12,
+    homeChunkKey: spawnPoint.chunkKey,
+    targetX: state.player.x,
+    targetY: state.player.y,
+    timer: 0,
+    lastSeenTimer: 0,
+    shootCooldown: randomBetween(rng, 1.2, 2.8),
+    faceX: -1,
+    faceY: 0,
+    inVehicle: true,
+    carColor: "#263852",
+    activeCar: null,
+    alive: true,
+    health: CONFIG.policeBossHealth,
+    maxHealth: CONFIG.policeBossHealth,
+    disengageTimer: 1.4,
+    orbitDirection: rng() > 0.5 ? 1 : -1,
+    orbitSeed: randomBetween(rng, 0, Math.PI * 2),
+    reinforcementCalled: false,
+    title: "Motorcycle Sergeant",
+  };
 }
 
 function createMilitaryNpc(type, spawnPoint, rng) {
@@ -1533,6 +1593,11 @@ function spawnSandboxEnemy(id, x, y) {
       state.world.npcs.push(createPoliceNpc({ ...spawnPoint, x: x + (index - 1) * 24 }, rng, { inVehicle: index === 0 }));
       state.world.nextNpcId += 1;
     }
+    return;
+  }
+
+  if (id === "policeBoss") {
+    spawnPoliceBossAt(x, y);
     return;
   }
 
@@ -1983,6 +2048,32 @@ function spawnPolice() {
   return true;
 }
 
+function spawnPoliceBossAt(x, y) {
+  const chunk = getOrCreateChunkForPosition(x, y);
+  if (!chunk) {
+    return false;
+  }
+  const spawnPoint = { x, y, chunkKey: chunk.key };
+  const rng = mulberry32(hash2d(Math.floor(x) * 17 + state.world.nextNpcId, Math.floor(y) * 19 - state.world.nextNpcId));
+  state.world.npcs.push(createPoliceBossNpc(spawnPoint, rng));
+  state.world.nextNpcId += 1;
+  state.world.policeBossSpawned = true;
+  state.world.alert = clamp(state.world.alert + 24, 0, 100);
+  return true;
+}
+
+function spawnPoliceBoss() {
+  const roadSpawns = getLoadedRoadSpawns(260).filter((spawn) => distanceBetween(spawn.x, spawn.y, state.player.x, state.player.y) > 300);
+  const stationSpawns = getLoadedPoliceSpawns().filter((spawn) => distanceBetween(spawn.x, spawn.y, state.player.x, state.player.y) > 300);
+  const sourcePool = stationSpawns.length ? stationSpawns : roadSpawns;
+  if (!sourcePool.length) {
+    return false;
+  }
+  const rng = mulberry32(hash2d(state.world.nextNpcId * 11, Math.floor(state.time * 17) + state.player.absorbedHumans * 13));
+  const spawnPoint = sourcePool[randomInt(rng, 0, sourcePool.length - 1)];
+  return spawnPoliceBossAt(spawnPoint.x, spawnPoint.y);
+}
+
 function getPlayerVisibilityRadius() {
   return state.player.radius + Math.sqrt(state.player.followers.length) * 3.4;
 }
@@ -2286,15 +2377,20 @@ function absorbNpc(npc) {
   } else if (npc.type === "cia" && npc.inVehicle) {
     releaseNpcVehicle(npc, { carType: "ciaCar", color: npc.carColor });
   }
+  if (npc.type === "police" || npc.type === "policeBoss") {
+    state.world.policeDeathsTotal += 1;
+  }
   npc.alive = false;
   state.player.absorbedHumans += 1;
   const biomass =
     npc.type === "tank" ? CONFIG.biomatterPerHuman + 4 :
     npc.type === "helicopter" ? CONFIG.biomatterPerHuman + 3 :
+    npc.type === "policeBoss" ? CONFIG.biomatterPerHuman + 6 :
     npc.type === "police" || npc.type === "militarySoldier" || npc.type === "militaryGrenadier" ? CONFIG.biomatterPerHuman + 1 :
     CONFIG.biomatterPerHuman;
   gainBiomass(biomass, npc.x, npc.y);
   const alertGain =
+    npc.type === "policeBoss" ? 34 :
     npc.type === "police" ? 18 :
     npc.type === "militarySoldier" || npc.type === "militaryGrenadier" ? 22 :
     npc.type === "tank" || npc.type === "helicopter" ? 28 :
@@ -2354,6 +2450,68 @@ function shootPlayer(npc, options = {}) {
     life,
   );
   damagePlayer(options.damage ?? CONFIG.damagePerShot, npc.x, npc.y, options.push ?? 0.7);
+}
+
+function shootShotgunPlayer(npc) {
+  if (lineOfSightBlocked(npc.x, npc.y, state.player.x, state.player.y)) {
+    return;
+  }
+
+  const dx = state.player.x - npc.x;
+  const dy = state.player.y - npc.y;
+  const distance = Math.hypot(dx, dy) || 0.0001;
+  const baseAngle = Math.atan2(dy, dx);
+  npc.faceX = dx / distance;
+  npc.faceY = dy / distance;
+  const pelletCount = CONFIG.policeBossShotgunPellets;
+  const spread = 0.38;
+  let hits = 0;
+
+  for (let index = 0; index < pelletCount; index += 1) {
+    const t = pelletCount === 1 ? 0.5 : index / (pelletCount - 1);
+    const angle = baseAngle + (t - 0.5) * spread;
+    const dirX = Math.cos(angle);
+    const dirY = Math.sin(angle);
+    const muzzleX = npc.x + dirX * 16;
+    const muzzleY = npc.y + dirY * 16;
+    const endX = muzzleX + dirX * Math.min(distance + 30, CONFIG.policeBossDesiredRange + 100);
+    const endY = muzzleY + dirY * Math.min(distance + 30, CONFIG.policeBossDesiredRange + 100);
+    spawnTracer(muzzleX, muzzleY, endX, endY, "rgba(255, 228, 172, 1)", 2.4, 0.12);
+
+    const projection = (state.player.x - muzzleX) * dirX + (state.player.y - muzzleY) * dirY;
+    const closestX = muzzleX + dirX * clamp(projection, 0, distance + 30);
+    const closestY = muzzleY + dirY * clamp(projection, 0, distance + 30);
+    const missDistance = distanceBetween(closestX, closestY, state.player.x, state.player.y);
+    if (missDistance <= state.player.radius + 10) {
+      hits += 1;
+    }
+  }
+
+  if (hits > 0) {
+    damagePlayer(CONFIG.policeBossPelletDamage * hits, npc.x, npc.y, 1.4);
+  }
+}
+
+function callPoliceBossReinforcements(npc) {
+  if (npc.reinforcementCalled) {
+    return;
+  }
+  npc.reinforcementCalled = true;
+  npc.disengageTimer = Math.max(npc.disengageTimer, CONFIG.policeBossDisengageTime + 1.5);
+  const rng = mulberry32(hash2d(npc.id * 31, Math.floor(state.time * 20) + state.world.nextNpcId));
+  for (let index = 0; index < 3; index += 1) {
+    const angle = randomBetween(rng, 0, Math.PI * 2);
+    const distance = randomBetween(rng, 70, 120);
+    const x = npc.x + Math.cos(angle) * distance;
+    const y = npc.y + Math.sin(angle) * distance;
+    const chunk = getOrCreateChunkForPosition(x, y);
+    if (!chunk) {
+      continue;
+    }
+    const spawnPoint = { x, y, chunkKey: chunk.key };
+    state.world.npcs.push(createPoliceNpc(spawnPoint, rng, { inVehicle: index < 2 }));
+    state.world.nextNpcId += 1;
+  }
 }
 
 function updateCivilian(npc, dt) {
@@ -2554,6 +2712,58 @@ function updatePolice(npc, dt) {
     } else {
       steerEntity(npc, npc.targetX, npc.targetY, 0.05, patrolSpeed, dt);
     }
+  }
+}
+
+function updatePoliceBoss(npc, dt) {
+  const distance = distanceBetween(npc.x, npc.y, state.player.x, state.player.y);
+  const touchingSwarm = getNpcSwarmContact(npc);
+  const seesPlayer = canSeePlayer(npc, CONFIG.policeBossVision);
+
+  npc.radius = 12;
+  npc.lastSeenTimer = 999;
+  npc.targetX = state.player.x;
+  npc.targetY = state.player.y;
+  state.world.alert = clamp(state.world.alert + 32 * dt, 0, 100);
+  npc.shootCooldown -= dt;
+  npc.disengageTimer = Math.max(0, npc.disengageTimer - dt);
+
+  if (touchingSwarm) {
+    const crushDamage = (5.5 + touchingSwarm.touchCount * 1.4 + Math.sqrt(state.player.followers.length + 1) * 0.08) * dt;
+    npc.health = Math.max(0, npc.health - crushDamage);
+    dragNpcIntoSwarm(npc, touchingSwarm, dt * 0.55);
+    spawnBloodStamp(npc.x, npc.y, 2.6, 1, -npc.vx * 0.8, -npc.vy * 0.8);
+    if (npc.health <= 0) {
+      absorbNpc(npc);
+      return;
+    }
+  }
+
+  if (!npc.reinforcementCalled && npc.health <= npc.maxHealth * 0.45) {
+    callPoliceBossReinforcements(npc);
+  }
+
+  if (distance < CONFIG.policeBossTooCloseRange) {
+    npc.disengageTimer = Math.max(npc.disengageTimer, CONFIG.policeBossDisengageTime);
+  }
+
+  if (npc.disengageTimer > 0) {
+    const angle = Math.atan2(npc.y - state.player.y, npc.x - state.player.x) + npc.orbitDirection * 0.65;
+    const retreatDistance = CONFIG.policeBossDesiredRange + 220;
+    const retreatX = state.player.x + Math.cos(angle) * retreatDistance;
+    const retreatY = state.player.y + Math.sin(angle) * retreatDistance;
+    steerEntity(npc, retreatX, retreatY, 0.14, CONFIG.policeBossSearchSpeed, dt);
+    return;
+  }
+
+  const attackAngle = state.time * 1.1 * npc.orbitDirection + npc.orbitSeed;
+  const attackX = state.player.x + Math.cos(attackAngle) * CONFIG.policeBossDesiredRange;
+  const attackY = state.player.y + Math.sin(attackAngle) * (CONFIG.policeBossDesiredRange * 0.72);
+  steerEntity(npc, attackX, attackY, 0.125, CONFIG.policeBossMotorcycleSpeed, dt);
+
+  if (seesPlayer && distance <= CONFIG.policeBossDesiredRange + 70 && npc.shootCooldown <= 0) {
+    shootShotgunPlayer(npc);
+    npc.shootCooldown = CONFIG.policeBossShotCooldown;
   }
 }
 
@@ -3402,6 +3612,8 @@ function updateNpcs(dt) {
       updateCivilian(npc, dt);
     } else if (npc.type === "police") {
       updatePolice(npc, dt);
+    } else if (npc.type === "policeBoss") {
+      updatePoliceBoss(npc, dt);
     } else if (npc.type === "militarySoldier") {
       updateMilitarySoldier(npc, dt);
     } else if (npc.type === "militaryGrenadier") {
@@ -3433,6 +3645,10 @@ function updateNpcs(dt) {
     } else {
       state.world.policeSpawnCooldown = 0.75;
     }
+  }
+
+  if (shouldSpawnPoliceBoss() && !hasPoliceBoss()) {
+    spawnPoliceBoss();
   }
 
   if (state.world.militarySpawnCooldown <= 0) {
@@ -3800,6 +4016,8 @@ function resetGame() {
   state.world.ciaSpawnCooldown = 0;
   state.world.alienSpawnCooldown = 0;
   state.world.playerSlowFactor = 1;
+  state.world.policeDeathsTotal = 0;
+  state.world.policeBossSpawned = false;
   state.time = 0;
   state.lastTime = 0;
   state.gameOver = false;
@@ -4169,6 +4387,57 @@ function drawNpc(npc) {
     ctx.beginPath();
     ctx.arc(screen.x, screen.y - npc.radius * 0.9, npc.radius * 0.55, 0, Math.PI * 2);
     ctx.fill();
+  } else if (npc.type === "policeBoss") {
+    const faceX = npc.faceX || 1;
+    const faceY = npc.faceY || 0;
+    const sideX = -faceY;
+    const sideY = faceX;
+    const bikeLength = 30;
+    const bikeWidth = 12;
+    const rearX = screen.x - faceX * 10;
+    const rearY = screen.y - faceY * 10;
+    const frontX = screen.x + faceX * 10;
+    const frontY = screen.y + faceY * 10;
+    const bodyX = screen.x + faceX * 2;
+    const bodyY = screen.y + faceY * 2;
+
+    ctx.strokeStyle = "#0f1014";
+    ctx.lineWidth = 3;
+    ctx.beginPath();
+    ctx.arc(rearX, rearY, 6, 0, Math.PI * 2);
+    ctx.arc(frontX, frontY, 6, 0, Math.PI * 2);
+    ctx.stroke();
+    ctx.fillStyle = "#1f2430";
+    ctx.beginPath();
+    ctx.moveTo(screen.x - faceX * (bikeLength * 0.35) - sideX * (bikeWidth * 0.45), screen.y - faceY * (bikeLength * 0.35) - sideY * (bikeWidth * 0.45));
+    ctx.lineTo(screen.x + faceX * (bikeLength * 0.35) - sideX * (bikeWidth * 0.45), screen.y + faceY * (bikeLength * 0.35) - sideY * (bikeWidth * 0.45));
+    ctx.lineTo(screen.x + faceX * (bikeLength * 0.35) + sideX * (bikeWidth * 0.45), screen.y + faceY * (bikeLength * 0.35) + sideY * (bikeWidth * 0.45));
+    ctx.lineTo(screen.x - faceX * (bikeLength * 0.35) + sideX * (bikeWidth * 0.45), screen.y - faceY * (bikeLength * 0.35) + sideY * (bikeWidth * 0.45));
+    ctx.closePath();
+    ctx.fill();
+    ctx.strokeStyle = "#596987";
+    ctx.lineWidth = 3;
+    ctx.beginPath();
+    ctx.moveTo(rearX, rearY);
+    ctx.lineTo(bodyX, bodyY);
+    ctx.lineTo(frontX, frontY);
+    ctx.stroke();
+    ctx.fillStyle = "#27466e";
+    ctx.beginPath();
+    ctx.arc(bodyX, bodyY, 7, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.fillStyle = "#f0d2c1";
+    ctx.beginPath();
+    ctx.arc(bodyX + faceX * 2, bodyY - 7, 4.2, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.fillStyle = "#10131a";
+    ctx.fillRect(bodyX - sideX * 2 - 3, bodyY - sideY * 2 + 1, 6, 10);
+    ctx.fillStyle = "#c98f34";
+    ctx.fillRect(frontX + faceX * 2 - 3, frontY + faceY * 2 - 2, 6, 4);
+    ctx.fillStyle = "rgba(255, 255, 255, 0.15)";
+    ctx.fillRect(screen.x - 14, screen.y - 22, 28, 4);
+    ctx.fillStyle = "#f0b65e";
+    ctx.fillRect(screen.x - 14, screen.y - 22, 28 * clamp(npc.health / npc.maxHealth, 0, 1), 4);
   } else if (npc.type === "police") {
     const faceX = npc.faceX || 1;
     const faceY = npc.faceY || 0;
