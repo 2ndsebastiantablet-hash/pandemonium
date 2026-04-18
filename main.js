@@ -101,9 +101,9 @@ const CONFIG = {
   ciaBossSpawnKills: 16,
   ciaWormUndergroundSpeed: 7.8,
   ciaWormSurfaceSpeed: 9.4,
-  ciaWormHoleLifetime: 12,
-  ciaWormBreachRadius: 92,
-  ciaWormBodyRadius: 58,
+  ciaWormHoleLifetime: 4.8,
+  ciaWormBreachRadius: 220,
+  ciaWormBodyRadius: 150,
   ciaWormQuakeStrength: 1.2,
   militaryBaseCannonRange: 430,
   militaryBaseMinigunRange: 320,
@@ -3857,8 +3857,8 @@ function spawnCIAWormHole(worm, x, y, radius) {
     life: CONFIG.ciaWormHoleLifetime,
     maxLife: CONFIG.ciaWormHoleLifetime,
   });
-  if (worm.holes.length > 18) {
-    worm.holes.splice(0, worm.holes.length - 18);
+  if (worm.holes.length > 10) {
+    worm.holes.splice(0, worm.holes.length - 10);
   }
 }
 
@@ -3901,8 +3901,8 @@ function updateCIAWorm(dt) {
     state.camera.shakeY = (Math.random() - 0.5) * worm.quake * 18;
 
     if (worm.cutsceneTimer > 3.4 && !worm.emergeApplied) {
-      spawnCIAWormHole(worm, worm.portalX, worm.portalY, 92);
-      destroyWorldWithWorm(worm.portalX, worm.portalY, 88);
+      spawnCIAWormHole(worm, worm.portalX, worm.portalY, 170);
+      destroyWorldWithWorm(worm.portalX, worm.portalY, 180);
       worm.emergeApplied = true;
     }
 
@@ -3946,8 +3946,8 @@ function updateCIAWorm(dt) {
     worm.x += worm.dirX * CONFIG.ciaWormUndergroundSpeed;
     worm.y += worm.dirY * CONFIG.ciaWormUndergroundSpeed;
     if (worm.damageTimer <= 0) {
-      spawnCIAWormHole(worm, worm.x, worm.y, 24 + Math.random() * 12);
-      worm.damageTimer = 0.18;
+      spawnCIAWormHole(worm, worm.x, worm.y, 44 + Math.random() * 24);
+      worm.damageTimer = 0.24;
     }
     if (distance < 40 || worm.timer <= 0) {
       const roll = Math.random();
@@ -3986,7 +3986,7 @@ function updateCIAWorm(dt) {
     worm.timer -= dt;
     const progress = 1 - worm.timer / 1.25;
     if (!worm.emergeApplied && progress >= 0.2) {
-      spawnCIAWormHole(worm, worm.x, worm.y, 84);
+      spawnCIAWormHole(worm, worm.x, worm.y, 210);
       destroyWorldWithWorm(worm.x, worm.y, CONFIG.ciaWormBreachRadius);
       worm.emergeApplied = true;
     }
@@ -4014,18 +4014,18 @@ function updateCIAWorm(dt) {
     worm.x += worm.dirX * CONFIG.ciaWormSurfaceSpeed;
     worm.y += worm.dirY * CONFIG.ciaWormSurfaceSpeed;
     worm.trail.unshift({ x: worm.x, y: worm.y, radius: CONFIG.ciaWormBodyRadius });
-    if (worm.trail.length > 14) {
-      worm.trail.length = 14;
+    if (worm.trail.length > 18) {
+      worm.trail.length = 18;
     }
     if (worm.damageTimer <= 0) {
-      for (let index = 0; index < Math.min(5, worm.trail.length); index += 1) {
+      for (let index = 0; index < Math.min(7, worm.trail.length); index += 1) {
         const segment = worm.trail[index];
-        destroyWorldWithWorm(segment.x, segment.y, segment.radius + 12 - index * 2);
+        destroyWorldWithWorm(segment.x, segment.y, Math.max(68, segment.radius + 26 - index * 5));
       }
-      worm.damageTimer = 0.12;
+      worm.damageTimer = 0.14;
     }
     if (worm.timer <= 0 || Math.random() < dt * 0.1) {
-      spawnCIAWormHole(worm, worm.x, worm.y, 72);
+      spawnCIAWormHole(worm, worm.x, worm.y, 180);
       worm.mode = "underground";
       worm.visible = false;
       const target = chooseCIAWormTarget();
@@ -5241,12 +5241,12 @@ function drawCIAWormHoles() {
   for (const hole of worm.holes) {
     const screen = worldToScreen(hole.x, hole.y);
     const fade = clamp(hole.life / hole.maxLife, 0, 1);
-    ctx.fillStyle = `rgba(34, 16, 12, ${(0.28 + fade * 0.32).toFixed(3)})`;
+    ctx.fillStyle = `rgba(34, 16, 12, ${(0.12 + fade * 0.2).toFixed(3)})`;
     ctx.beginPath();
     ctx.ellipse(screen.x, screen.y, hole.radius, hole.radius * 0.72, 0, 0, Math.PI * 2);
     ctx.fill();
-    ctx.strokeStyle = `rgba(116, 70, 58, ${(0.18 + fade * 0.26).toFixed(3)})`;
-    ctx.lineWidth = 4;
+    ctx.strokeStyle = `rgba(116, 70, 58, ${(0.12 + fade * 0.18).toFixed(3)})`;
+    ctx.lineWidth = Math.max(3, hole.radius * 0.04);
     ctx.beginPath();
     ctx.ellipse(screen.x, screen.y, hole.radius * 0.92, hole.radius * 0.62, 0, 0, Math.PI * 2);
     ctx.stroke();
@@ -5288,28 +5288,28 @@ function drawCIAWorm() {
       const mouthOpen = 0.45 + Math.abs(Math.sin(worm.chompPhase)) * 0.55;
       ctx.save();
       ctx.translate(portal.x, portal.y);
-      ctx.scale(1.45, 1);
+      ctx.scale(2.35, 1.7);
       ctx.fillStyle = "#d8b4aa";
       ctx.beginPath();
-      ctx.ellipse(0, -18, 76, 54, 0, 0, Math.PI * 2);
+      ctx.ellipse(0, -18, 110, 82, 0, 0, Math.PI * 2);
       ctx.fill();
       ctx.fillStyle = "#58231d";
       ctx.beginPath();
-      ctx.ellipse(0, -12, 46, 26 + mouthOpen * 24, 0, 0, Math.PI * 2);
+      ctx.ellipse(0, -12, 68, 32 + mouthOpen * 34, 0, 0, Math.PI * 2);
       ctx.fill();
-      for (let index = 0; index < 16; index += 1) {
-        const toothX = -40 + index * 5.2;
+      for (let index = 0; index < 22; index += 1) {
+        const toothX = -62 + index * 5.8;
         ctx.fillStyle = "#f0ece6";
         ctx.beginPath();
         ctx.moveTo(toothX, -26);
-        ctx.lineTo(toothX + 3, -8 + mouthOpen * 6);
-        ctx.lineTo(toothX + 6, -26);
+        ctx.lineTo(toothX + 3.5, -2 + mouthOpen * 9);
+        ctx.lineTo(toothX + 7, -26);
         ctx.closePath();
         ctx.fill();
         ctx.beginPath();
         ctx.moveTo(toothX, 2);
-        ctx.lineTo(toothX + 3, -12 - mouthOpen * 8);
-        ctx.lineTo(toothX + 6, 2);
+        ctx.lineTo(toothX + 3.5, -18 - mouthOpen * 12);
+        ctx.lineTo(toothX + 7, 2);
         ctx.closePath();
         ctx.fill();
       }
@@ -5330,7 +5330,7 @@ function drawCIAWorm() {
     const radius = segment.radius * (0.42 + scale * 0.92);
     ctx.fillStyle = index === 0 ? "#d9b2a7" : "#cf9e93";
     ctx.beginPath();
-    ctx.ellipse(screen.x, screen.y, radius * 1.18, radius * 0.92, Math.atan2(worm.dirY, worm.dirX), 0, Math.PI * 2);
+    ctx.ellipse(screen.x, screen.y, radius * 1.34, radius * 1.02, Math.atan2(worm.dirY, worm.dirX), 0, Math.PI * 2);
     ctx.fill();
   }
 
@@ -5342,29 +5342,29 @@ function drawCIAWorm() {
   ctx.rotate(headAngle);
   ctx.fillStyle = "#e2beb3";
   ctx.beginPath();
-  ctx.ellipse(0, 0, 92, 68, 0, 0, Math.PI * 2);
+  ctx.ellipse(0, 0, 220, 165, 0, 0, Math.PI * 2);
   ctx.fill();
   ctx.fillStyle = "#57211c";
   ctx.beginPath();
-  ctx.ellipse(38, 0, 46, 22 + mouthOpen * 26, 0, 0, Math.PI * 2);
+  ctx.ellipse(94, 0, 116, 58 + mouthOpen * 72, 0, 0, Math.PI * 2);
   ctx.fill();
-  for (let index = 0; index < 20; index += 1) {
-    const toothY = -28 + index * 2.8;
+  for (let index = 0; index < 34; index += 1) {
+    const toothY = -66 + index * 4.1;
     ctx.fillStyle = "#f1ece7";
     ctx.beginPath();
-    ctx.moveTo(6, toothY);
-    ctx.lineTo(38, toothY + 2);
-    ctx.lineTo(10, toothY + 6);
+    ctx.moveTo(16, toothY);
+    ctx.lineTo(98, toothY + 3);
+    ctx.lineTo(22, toothY + 10);
     ctx.closePath();
     ctx.fill();
   }
-  for (let index = 0; index < 18; index += 1) {
-    const toothY = -24 + index * 2.7;
+  for (let index = 0; index < 30; index += 1) {
+    const toothY = -58 + index * 4;
     ctx.fillStyle = "#ebe5de";
     ctx.beginPath();
-    ctx.moveTo(62, toothY);
-    ctx.lineTo(36, toothY + 2);
-    ctx.lineTo(58, toothY + 5);
+    ctx.moveTo(150, toothY);
+    ctx.lineTo(84, toothY + 3);
+    ctx.lineTo(142, toothY + 9);
     ctx.closePath();
     ctx.fill();
   }
