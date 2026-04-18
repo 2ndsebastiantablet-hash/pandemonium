@@ -1,0 +1,31 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Pandemonium</title>
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+  <main class="app-shell">
+    <section id="menuScreen" class="menu-screen" aria-label="Main menu">
+      <div class="menu-card">
+        <p class="menu-kicker">A Shape-Shifting Town Horror</p>
+        <h1>Pandemonium</h1>
+        <button id="playButton" type="button">Play</button>
+      </div>
+    </section>
+    <canvas id="gameCanvas" aria-label="Symbiote particle game"></canvas>
+    <section class="hud">
+      <h1>Pandemonium</h1>
+      <p>Guide the shape-shifting swarm through an infinite town, hide behind buildings, absorb civilians to grow, and avoid police gunfire. Click once to wake the soundscape in Chrome.</p>
+      <div class="hud-row">
+        <button id="resetButton" type="button">Reset Town</button>
+        <span id="particleCount"></span>
+      </div>
+    </section>
+  </main>
+
+  <script src="main.js"></script>
+</body>
+</html>
