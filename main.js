@@ -97,6 +97,14 @@ const CONFIG = {
   ciaFootSpeed: 2.35,
   ciaDamage: 19,
   ciaShotCooldown: 0.24,
+  ciaBossSpawnConsumed: 84,
+  ciaBossSpawnKills: 16,
+  ciaWormUndergroundSpeed: 7.8,
+  ciaWormSurfaceSpeed: 9.4,
+  ciaWormHoleLifetime: 12,
+  ciaWormBreachRadius: 92,
+  ciaWormBodyRadius: 58,
+  ciaWormQuakeStrength: 1.2,
   militaryBaseCannonRange: 430,
   militaryBaseMinigunRange: 320,
   militaryBaseCannonCooldown: 2.6,
@@ -187,6 +195,15 @@ const state = {
     policeBossSpawned: false,
     militaryDeathsTotal: 0,
     militaryBossSpawned: false,
+    ciaDeathsTotal: 0,
+    ciaBossSpawned: false,
+    ciaWorm: null,
+  },
+  camera: {
+    focusX: null,
+    focusY: null,
+    shakeX: 0,
+    shakeY: 0,
   },
   audio: {
     ctx: null,
@@ -231,6 +248,7 @@ const SANDBOX_ENEMY_OPTIONS = [
   { id: "tank", label: "Tank" },
   { id: "helicopter", label: "Helicopter" },
   { id: "ciaSquad", label: "CIA Squad" },
+  { id: "ciaBoss", label: "CIA Worm" },
   { id: "alien", label: "Alien Ship" },
   { id: "alienWing", label: "Alien Wing" },
 ];
@@ -631,7 +649,12 @@ function getChunkCoords(x, y) {
 }
 
 function getCamera() {
-  return { x: state.player.x, y: state.player.y };
+  const baseX = state.camera.focusX == null ? state.player.x : state.camera.focusX;
+  const baseY = state.camera.focusY == null ? state.player.y : state.camera.focusY;
+  return {
+    x: baseX + state.camera.shakeX,
+    y: baseY + state.camera.shakeY,
+  };
 }
 
 function worldToScreen(x, y) {
@@ -1435,6 +1458,42 @@ function hasMilitaryBoss() {
   return state.world.npcs.some((npc) => npc.type === "militaryBoss" && npc.alive);
 }
 
+function shouldSpawnCIABoss() {
+  if (state.world.ciaBossSpawned) {
+    return false;
+  }
+  return (
+    state.player.absorbedHumans >= CONFIG.ciaBossSpawnConsumed ||
+    state.world.ciaDeathsTotal >= CONFIG.ciaBossSpawnKills
+  );
+}
+
+function createCIAWormState() {
+  return {
+    active: false,
+    cutscene: false,
+    cutsceneTimer: 0,
+    portalX: 0,
+    portalY: 0,
+    x: 0,
+    y: 0,
+    targetX: 0,
+    targetY: 0,
+    dirX: 1,
+    dirY: 0,
+    mode: "dormant",
+    timer: 0,
+    actionTimer: 0,
+    damageTimer: 0,
+    quake: 0,
+    holes: [],
+    trail: [],
+    visible: false,
+    chompPhase: 0,
+    emergeApplied: false,
+  };
+}
+
 function desiredMilitaryCounts() {
   const size = state.player.absorbedHumans;
   return {
@@ -1710,6 +1769,11 @@ function spawnSandboxEnemy(id, x, y) {
     return;
   }
 
+  if (id === "ciaBoss") {
+    triggerCIAWormSummon(x, y, { immediate: true });
+    return;
+  }
+
   if (id === "alienWing") {
     for (let index = 0; index < 3; index += 1) {
       const alien = createAlienNpc({ ...spawnPoint, x: x + (index - 1) * 34, y: y - Math.abs(index - 1) * 12 }, rng);
@@ -1907,6 +1971,46 @@ function spawnCIASquad() {
     state.world.nextNpcId += 1;
   }
   return true;
+}
+
+function triggerCIAWormSummon(x, y, options = {}) {
+  if (!state.world.ciaWorm) {
+    state.world.ciaWorm = createCIAWormState();
+  }
+  const worm = state.world.ciaWorm;
+  worm.portalX = x;
+  worm.portalY = y;
+  worm.x = x;
+  worm.y = y;
+  worm.targetX = x;
+  worm.targetY = y;
+  worm.dirX = 1;
+  worm.dirY = 0;
+  worm.trail = [];
+  worm.holes = [];
+  worm.quake = 0;
+  worm.chompPhase = 0;
+  worm.emergeApplied = false;
+  state.world.ciaBossSpawned = true;
+
+  if (options.immediate) {
+    worm.active = true;
+    worm.cutscene = false;
+    worm.cutsceneTimer = 0;
+    worm.mode = "underground";
+    worm.timer = 1.4;
+    worm.visible = false;
+    worm.targetX = x + 180;
+    worm.targetY = y + 120;
+    return;
+  }
+
+  worm.active = false;
+  worm.cutscene = true;
+  worm.cutsceneTimer = 0;
+  worm.mode = "cutscene";
+  worm.visible = true;
+  worm.timer = 0;
 }
 
 function getLoadedPoliceSpawns() {
@@ -2513,6 +2617,9 @@ function absorbNpc(npc) {
   if (["militarySoldier", "militaryGrenadier", "tank", "helicopter", "militaryBoss"].includes(npc.type)) {
     state.world.militaryDeathsTotal += npc.type === "militaryBoss" ? 6 : 1;
   }
+  if (npc.type === "cia") {
+    state.world.ciaDeathsTotal += 1;
+  }
   npc.alive = false;
   state.player.absorbedHumans += 1;
   const biomass =
@@ -2553,6 +2660,89 @@ function absorbNpc(npc) {
   );
   playScreamSound(npc.type === "civilian" ? 1.2 : 0.9);
   playAssimilationSound(1 + state.player.followers.length / 70);
+}
+
+function killNpcByWorm(npc) {
+  if (npc.type === "civilian" && npc.inCar) {
+    releaseNpcVehicle(npc, { carType: "civilianCar", color: npc.carColor });
+  } else if ((npc.type === "police" || npc.type === "policeBoss") && npc.inVehicle) {
+    releaseNpcVehicle(npc, { carType: "policeCar", color: npc.carColor });
+  } else if (npc.type === "cia" && npc.inVehicle) {
+    releaseNpcVehicle(npc, { carType: "ciaCar", color: npc.carColor });
+  }
+
+  if (npc.type === "police" || npc.type === "policeBoss") {
+    state.world.policeDeathsTotal += 1;
+  }
+  if (["militarySoldier", "militaryGrenadier", "tank", "helicopter", "militaryBoss"].includes(npc.type)) {
+    state.world.militaryDeathsTotal += npc.type === "militaryBoss" ? 6 : 1;
+  }
+  if (npc.type === "cia") {
+    state.world.ciaDeathsTotal += 1;
+  }
+
+  npc.alive = false;
+  spawnBloodStamp(npc.x, npc.y, 10 + npc.radius * 0.5, 4, npc.vx * 2.4, npc.vy * 2.4);
+  spawnOrganicBurst(npc.x, npc.y, 1.8 + npc.radius * 0.08, npc.vx * 0.8, npc.vy * 0.8, { minCount: 1 });
+}
+
+function wormCircleHitsDecor(x, y, radius, deco) {
+  if (deco.type === "tree") {
+    return distanceBetween(x, y, deco.x, deco.y) <= radius + deco.size;
+  }
+  if (deco.type === "lamp") {
+    return circleIntersectsRect(x, y, radius, {
+      x: deco.x - 6,
+      y: deco.y - (deco.height || 18) - 2,
+      w: 12,
+      h: (deco.height || 18) + 4,
+    });
+  }
+  if (deco.type === "policeCar" || deco.type === "civilianCar" || deco.type === "ciaCar") {
+    return circleIntersectsRect(x, y, radius, deco);
+  }
+  return false;
+}
+
+function destroyWorldWithWorm(x, y, radius) {
+  for (const npc of state.world.npcs) {
+    if (!npc.alive) {
+      continue;
+    }
+    if (distanceBetween(x, y, npc.x, npc.y) <= radius + npc.radius) {
+      killNpcByWorm(npc);
+    }
+  }
+
+  if (distanceBetween(x, y, state.player.x, state.player.y) <= radius + state.player.radius) {
+    state.player.health = 0;
+    state.gameOver = true;
+  }
+
+  for (const chunk of state.world.chunks.values()) {
+    for (const building of chunk.buildings) {
+      if (building.destroyed) {
+        continue;
+      }
+      if (circleIntersectsRect(x, y, radius, building)) {
+        building.integrity = 0;
+        building.baseIntegrity = 0;
+        building.falling = true;
+        building.fallDirection = x >= building.x + building.w * 0.5 ? 1 : -1;
+        spawnDebrisBurst(building.x + building.w * 0.5, building.y + building.h * 0.5, building.chipColor, 18, building.fallDirection * 1.2, 0.6, 6);
+      }
+    }
+    for (const deco of chunk.decor) {
+      if (deco.destroyed) {
+        continue;
+      }
+      if (wormCircleHitsDecor(x, y, radius, deco)) {
+        deco.destroyed = true;
+        deco.falling = false;
+        spawnDebrisBurst(deco.x, deco.y, deco.chipColor || "#777", 9, 0.8, 0.2, 4);
+      }
+    }
+  }
 }
 
 function shootPlayer(npc, options = {}) {
@@ -3640,6 +3830,211 @@ function updateCIA(npc, dt) {
   }
 }
 
+function applyEarthquakeToNpc(npc, dt) {
+  const worm = state.world.ciaWorm;
+  if (!worm || worm.quake <= 0.08) {
+    return;
+  }
+  const vehicleLike = npc.inCar || npc.inVehicle || npc.type === "tank";
+  if (!vehicleLike) {
+    return;
+  }
+  const wobble = worm.quake * dt * 60 * 0.12;
+  npc.vx += (Math.random() - 0.5) * wobble;
+  npc.vy += (Math.random() - 0.5) * wobble;
+  if (npc.type === "civilian") {
+    npc.fearTimer = Math.max(npc.fearTimer || 0, 1.8);
+  }
+}
+
+function spawnCIAWormHole(worm, x, y, radius) {
+  worm.holes.push({
+    x,
+    y,
+    radius,
+    life: CONFIG.ciaWormHoleLifetime,
+    maxLife: CONFIG.ciaWormHoleLifetime,
+  });
+  if (worm.holes.length > 18) {
+    worm.holes.splice(0, worm.holes.length - 18);
+  }
+}
+
+function chooseCIAWormTarget() {
+  const angle = Math.random() * Math.PI * 2;
+  const distance = 180 + Math.random() * 420;
+  return {
+    x: state.player.x + Math.cos(angle) * distance,
+    y: state.player.y + Math.sin(angle) * distance,
+  };
+}
+
+function updateCIAWorm(dt) {
+  const worm = state.world.ciaWorm;
+  state.camera.focusX = null;
+  state.camera.focusY = null;
+  state.camera.shakeX = 0;
+  state.camera.shakeY = 0;
+  if (!worm) {
+    return;
+  }
+
+  for (let index = worm.holes.length - 1; index >= 0; index -= 1) {
+    worm.holes[index].life -= dt;
+    if (worm.holes[index].life <= 0) {
+      worm.holes.splice(index, 1);
+    }
+  }
+
+  worm.chompPhase += dt * 22;
+  worm.quake = Math.max(0, worm.quake - dt * 1.2);
+
+  if (worm.cutscene) {
+    worm.cutsceneTimer += dt;
+    state.camera.focusX = worm.portalX;
+    state.camera.focusY = worm.portalY;
+    worm.quake = worm.cutsceneTimer > 2.2 ? CONFIG.ciaWormQuakeStrength * 0.75 : 0.18;
+    state.camera.shakeX = (Math.random() - 0.5) * worm.quake * 22;
+    state.camera.shakeY = (Math.random() - 0.5) * worm.quake * 18;
+
+    if (worm.cutsceneTimer > 3.4 && !worm.emergeApplied) {
+      spawnCIAWormHole(worm, worm.portalX, worm.portalY, 92);
+      destroyWorldWithWorm(worm.portalX, worm.portalY, 88);
+      worm.emergeApplied = true;
+    }
+
+    if (worm.cutsceneTimer >= 5.6) {
+      worm.cutscene = false;
+      worm.active = true;
+      worm.visible = false;
+      worm.mode = "underground";
+      worm.timer = 1.2;
+      worm.x = worm.portalX;
+      worm.y = worm.portalY;
+      worm.targetX = worm.portalX + 240;
+      worm.targetY = worm.portalY + 160;
+      worm.trail = [];
+    }
+    return;
+  }
+
+  if (!worm.active) {
+    return;
+  }
+
+  if (worm.visible) {
+    const focusDistance = distanceBetween(worm.x, worm.y, state.player.x, state.player.y);
+    if (focusDistance > 220) {
+      state.camera.focusX = lerp(state.player.x, worm.x, 0.45);
+      state.camera.focusY = lerp(state.player.y, worm.y, 0.45);
+    }
+  }
+
+  if (worm.mode === "underground") {
+    worm.visible = false;
+    worm.quake = Math.max(worm.quake, CONFIG.ciaWormQuakeStrength);
+    state.camera.shakeX = (Math.random() - 0.5) * worm.quake * 16;
+    state.camera.shakeY = (Math.random() - 0.5) * worm.quake * 14;
+    worm.timer -= dt;
+    worm.damageTimer -= dt;
+    const dx = worm.targetX - worm.x;
+    const dy = worm.targetY - worm.y;
+    const distance = Math.hypot(dx, dy) || 0.0001;
+    worm.dirX = dx / distance;
+    worm.dirY = dy / distance;
+    worm.x += worm.dirX * CONFIG.ciaWormUndergroundSpeed;
+    worm.y += worm.dirY * CONFIG.ciaWormUndergroundSpeed;
+    if (worm.damageTimer <= 0) {
+      spawnCIAWormHole(worm, worm.x, worm.y, 24 + Math.random() * 12);
+      worm.damageTimer = 0.18;
+    }
+    if (distance < 40 || worm.timer <= 0) {
+      const roll = Math.random();
+      if (roll < 0.45) {
+        worm.mode = "breach";
+        worm.visible = true;
+        worm.timer = 1.25;
+        worm.emergeApplied = false;
+        worm.trail = [{ x: worm.x, y: worm.y, radius: CONFIG.ciaWormBodyRadius }];
+      } else if (roll < 0.78) {
+        worm.mode = "surface";
+        worm.visible = true;
+        worm.timer = 4 + Math.random() * 2.2;
+        const target = chooseCIAWormTarget();
+        const fx = target.x - worm.x;
+        const fy = target.y - worm.y;
+        const length = Math.hypot(fx, fy) || 0.0001;
+        worm.dirX = fx / length;
+        worm.dirY = fy / length;
+        worm.trail = [];
+        worm.damageTimer = 0;
+      } else {
+        const target = chooseCIAWormTarget();
+        worm.targetX = target.x;
+        worm.targetY = target.y;
+        worm.timer = 1.2 + Math.random() * 1.6;
+      }
+    }
+    return;
+  }
+
+  if (worm.mode === "breach") {
+    worm.quake = Math.max(worm.quake, CONFIG.ciaWormQuakeStrength * 1.1);
+    state.camera.shakeX = (Math.random() - 0.5) * worm.quake * 24;
+    state.camera.shakeY = (Math.random() - 0.5) * worm.quake * 20;
+    worm.timer -= dt;
+    const progress = 1 - worm.timer / 1.25;
+    if (!worm.emergeApplied && progress >= 0.2) {
+      spawnCIAWormHole(worm, worm.x, worm.y, 84);
+      destroyWorldWithWorm(worm.x, worm.y, CONFIG.ciaWormBreachRadius);
+      worm.emergeApplied = true;
+    }
+    if (worm.timer <= 0) {
+      worm.mode = "underground";
+      worm.visible = false;
+      const target = chooseCIAWormTarget();
+      worm.targetX = target.x;
+      worm.targetY = target.y;
+      worm.timer = 1 + Math.random() * 1.5;
+    }
+    return;
+  }
+
+  if (worm.mode === "surface") {
+    worm.quake = Math.max(worm.quake, CONFIG.ciaWormQuakeStrength * 0.85);
+    state.camera.shakeX = (Math.random() - 0.5) * worm.quake * 18;
+    state.camera.shakeY = (Math.random() - 0.5) * worm.quake * 16;
+    worm.timer -= dt;
+    worm.damageTimer -= dt;
+    const drift = (Math.random() - 0.5) * 0.08;
+    const angle = Math.atan2(worm.dirY, worm.dirX) + drift;
+    worm.dirX = Math.cos(angle);
+    worm.dirY = Math.sin(angle);
+    worm.x += worm.dirX * CONFIG.ciaWormSurfaceSpeed;
+    worm.y += worm.dirY * CONFIG.ciaWormSurfaceSpeed;
+    worm.trail.unshift({ x: worm.x, y: worm.y, radius: CONFIG.ciaWormBodyRadius });
+    if (worm.trail.length > 14) {
+      worm.trail.length = 14;
+    }
+    if (worm.damageTimer <= 0) {
+      for (let index = 0; index < Math.min(5, worm.trail.length); index += 1) {
+        const segment = worm.trail[index];
+        destroyWorldWithWorm(segment.x, segment.y, segment.radius + 12 - index * 2);
+      }
+      worm.damageTimer = 0.12;
+    }
+    if (worm.timer <= 0 || Math.random() < dt * 0.24) {
+      spawnCIAWormHole(worm, worm.x, worm.y, 72);
+      worm.mode = "underground";
+      worm.visible = false;
+      const target = chooseCIAWormTarget();
+      worm.targetX = target.x;
+      worm.targetY = target.y;
+      worm.timer = 1.1 + Math.random() * 1.8;
+    }
+  }
+}
+
 function updateBaseDefenses(dt) {
   for (const chunk of state.world.chunks.values()) {
     for (const building of chunk.buildings) {
@@ -4042,6 +4437,7 @@ function updateNpcs(dt) {
       state.world.npcs.splice(index, 1);
       continue;
     }
+    applyEarthquakeToNpc(npc, dt);
     if (npc.type === "civilian") {
       updateCivilian(npc, dt);
     } else if (npc.type === "police") {
@@ -4427,11 +4823,28 @@ function updateGame(dt) {
     return;
   }
   ensureChunksAroundPlayer();
+  if (state.gameMode !== "sandbox" && shouldSpawnCIABoss()) {
+    const angle = Math.random() * Math.PI * 2;
+    const distance = 180 + Math.random() * 220;
+    triggerCIAWormSummon(
+      state.player.x + Math.cos(angle) * distance,
+      state.player.y + Math.sin(angle) * distance,
+    );
+  }
+  if (state.world.ciaWorm?.cutscene) {
+    updateCIAWorm(dt);
+    updateExplosions(dt);
+    updateDebris(dt);
+    updateBlood(dt);
+    updateTracers(dt);
+    return;
+  }
   updatePlayer(dt);
   updateStructureDamage(dt);
   updateFallingStructures(dt);
   updateBaseDefenses(dt);
   updateNpcs(dt);
+  updateCIAWorm(dt);
   updateTraps(dt);
   updateProjectiles(dt);
   updateExplosions(dt);
@@ -4460,9 +4873,16 @@ function resetGame() {
   state.world.policeBossSpawned = false;
   state.world.militaryDeathsTotal = 0;
   state.world.militaryBossSpawned = false;
+  state.world.ciaDeathsTotal = 0;
+  state.world.ciaBossSpawned = false;
+  state.world.ciaWorm = createCIAWormState();
   state.time = 0;
   state.lastTime = 0;
   state.gameOver = false;
+  state.camera.focusX = null;
+  state.camera.focusY = null;
+  state.camera.shakeX = 0;
+  state.camera.shakeY = 0;
 
   state.player.x = 0;
   state.player.y = 0;
@@ -4502,13 +4922,18 @@ function updateHud() {
     updateSandboxUi();
     return;
   }
+  if (state.world.ciaWorm?.cutscene) {
+    particleCountLabel.textContent = "CIA ritual in progress | A portal is opening beneath the town";
+    updateSandboxUi();
+    return;
+  }
   const militaryCount =
     countNpcsByType("militarySoldier") +
     countNpcsByType("militaryGrenadier") +
     countNpcsByType("militaryBoss") +
     countNpcsByType("tank") +
     countNpcsByType("helicopter");
-  const ciaCount = countNpcsByType("cia");
+  const ciaCount = countNpcsByType("cia") + (state.world.ciaWorm?.active || state.world.ciaWorm?.cutscene ? 1 : 0);
   const alienCount = countNpcsByType("alien");
   const dayNight = getDayNightState();
   particleCountLabel.textContent = `Health ${Math.round(state.player.health)}/${Math.round(state.player.maxHealth)} | Alert ${Math.round(state.world.alert)} | ${dayNight.label} | Consumed ${state.player.absorbedHumans} | Police ${countNpcsByType("police")} | Military ${militaryCount} | CIA ${ciaCount} | Aliens ${alienCount} | Morph ${state.player.morphName}`;
@@ -4805,6 +5230,144 @@ function drawBlood() {
     ctx.fill();
     ctx.restore();
   }
+}
+
+function drawCIAWormHoles() {
+  const worm = state.world.ciaWorm;
+  if (!worm) {
+    return;
+  }
+  for (const hole of worm.holes) {
+    const screen = worldToScreen(hole.x, hole.y);
+    const fade = clamp(hole.life / hole.maxLife, 0, 1);
+    ctx.fillStyle = `rgba(34, 16, 12, ${(0.28 + fade * 0.32).toFixed(3)})`;
+    ctx.beginPath();
+    ctx.ellipse(screen.x, screen.y, hole.radius, hole.radius * 0.72, 0, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.strokeStyle = `rgba(116, 70, 58, ${(0.18 + fade * 0.26).toFixed(3)})`;
+    ctx.lineWidth = 4;
+    ctx.beginPath();
+    ctx.ellipse(screen.x, screen.y, hole.radius * 0.92, hole.radius * 0.62, 0, 0, Math.PI * 2);
+    ctx.stroke();
+  }
+}
+
+function drawCIAWorm() {
+  const worm = state.world.ciaWorm;
+  if (!worm) {
+    return;
+  }
+
+  if (worm.cutscene) {
+    const portal = worldToScreen(worm.portalX, worm.portalY);
+    const pulse = 1 + Math.sin(worm.cutsceneTimer * 5.5) * 0.08;
+    const portalRadius = 58 + Math.min(40, worm.cutsceneTimer * 12);
+    const portalGradient = ctx.createRadialGradient(portal.x, portal.y, 10, portal.x, portal.y, portalRadius * 1.35);
+    portalGradient.addColorStop(0, "rgba(12, 7, 18, 0.94)");
+    portalGradient.addColorStop(0.55, "rgba(126, 26, 52, 0.72)");
+    portalGradient.addColorStop(1, "rgba(98, 18, 40, 0)");
+    ctx.fillStyle = portalGradient;
+    ctx.beginPath();
+    ctx.arc(portal.x, portal.y, portalRadius * pulse, 0, Math.PI * 2);
+    ctx.fill();
+
+    for (let index = 0; index < 4; index += 1) {
+      const angle = Math.PI * 0.25 + index * (Math.PI / 2);
+      const manX = portal.x + Math.cos(angle) * 70;
+      const manY = portal.y + Math.sin(angle) * 48;
+      ctx.fillStyle = "#101114";
+      ctx.beginPath();
+      ctx.arc(manX, manY, 8, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.fillStyle = "#0b0c0f";
+      ctx.fillRect(manX - 5, manY + 2, 10, 20);
+    }
+
+    if (worm.cutsceneTimer > 2) {
+      const mouthOpen = 0.45 + Math.abs(Math.sin(worm.chompPhase)) * 0.55;
+      ctx.save();
+      ctx.translate(portal.x, portal.y);
+      ctx.scale(1.45, 1);
+      ctx.fillStyle = "#d8b4aa";
+      ctx.beginPath();
+      ctx.ellipse(0, -18, 76, 54, 0, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.fillStyle = "#58231d";
+      ctx.beginPath();
+      ctx.ellipse(0, -12, 46, 26 + mouthOpen * 24, 0, 0, Math.PI * 2);
+      ctx.fill();
+      for (let index = 0; index < 16; index += 1) {
+        const toothX = -40 + index * 5.2;
+        ctx.fillStyle = "#f0ece6";
+        ctx.beginPath();
+        ctx.moveTo(toothX, -26);
+        ctx.lineTo(toothX + 3, -8 + mouthOpen * 6);
+        ctx.lineTo(toothX + 6, -26);
+        ctx.closePath();
+        ctx.fill();
+        ctx.beginPath();
+        ctx.moveTo(toothX, 2);
+        ctx.lineTo(toothX + 3, -12 - mouthOpen * 8);
+        ctx.lineTo(toothX + 6, 2);
+        ctx.closePath();
+        ctx.fill();
+      }
+      ctx.restore();
+    }
+    return;
+  }
+
+  if (!worm.visible) {
+    return;
+  }
+
+  const segments = worm.mode === "surface" ? worm.trail : [{ x: worm.x, y: worm.y, radius: CONFIG.ciaWormBodyRadius }];
+  for (let index = segments.length - 1; index >= 0; index -= 1) {
+    const segment = segments[index];
+    const screen = worldToScreen(segment.x, segment.y);
+    const scale = 1 - index / Math.max(segments.length + 2, 3);
+    const radius = segment.radius * (0.42 + scale * 0.92);
+    ctx.fillStyle = index === 0 ? "#d9b2a7" : "#cf9e93";
+    ctx.beginPath();
+    ctx.ellipse(screen.x, screen.y, radius * 1.18, radius * 0.92, Math.atan2(worm.dirY, worm.dirX), 0, Math.PI * 2);
+    ctx.fill();
+  }
+
+  const head = worldToScreen(worm.x, worm.y);
+  const headAngle = Math.atan2(worm.dirY, worm.dirX);
+  const mouthOpen = 0.55 + Math.abs(Math.sin(worm.chompPhase)) * 0.6;
+  ctx.save();
+  ctx.translate(head.x, head.y);
+  ctx.rotate(headAngle);
+  ctx.fillStyle = "#e2beb3";
+  ctx.beginPath();
+  ctx.ellipse(0, 0, 92, 68, 0, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.fillStyle = "#57211c";
+  ctx.beginPath();
+  ctx.ellipse(38, 0, 46, 22 + mouthOpen * 26, 0, 0, Math.PI * 2);
+  ctx.fill();
+  for (let index = 0; index < 20; index += 1) {
+    const toothY = -28 + index * 2.8;
+    ctx.fillStyle = "#f1ece7";
+    ctx.beginPath();
+    ctx.moveTo(6, toothY);
+    ctx.lineTo(38, toothY + 2);
+    ctx.lineTo(10, toothY + 6);
+    ctx.closePath();
+    ctx.fill();
+  }
+  for (let index = 0; index < 18; index += 1) {
+    const toothY = -24 + index * 2.7;
+    ctx.fillStyle = "#ebe5de";
+    ctx.beginPath();
+    ctx.moveTo(62, toothY);
+    ctx.lineTo(36, toothY + 2);
+    ctx.lineTo(58, toothY + 5);
+    ctx.closePath();
+    ctx.fill();
+  }
+  ctx.restore();
 }
 
 function drawNpc(npc) {
@@ -5297,6 +5860,11 @@ function drawOverlay() {
     ctx.fillRect(0, 0, state.width, state.height);
   }
 
+  if (state.world.ciaWorm?.quake > 0.08) {
+    ctx.fillStyle = `rgba(132, 88, 64, ${(state.world.ciaWorm.quake * 0.06).toFixed(3)})`;
+    ctx.fillRect(0, 0, state.width, state.height);
+  }
+
   const growthTint = clamp((state.player.absorbedHumans - 2) / 72, 0, 1);
   if (growthTint > 0) {
     ctx.fillStyle = `rgba(126, 8, 8, ${(0.02 + growthTint * 0.11).toFixed(3)})`;
@@ -5312,6 +5880,17 @@ function drawOverlay() {
     ctx.fillText("The Swarm Was Put Down", state.width * 0.5, state.height * 0.5 - 12);
     ctx.font = "18px Segoe UI";
     ctx.fillText(`Press ${state.gameMode === "sandbox" ? "Reset Arena" : "Reset Town"} to try again.`, state.width * 0.5, state.height * 0.5 + 22);
+  }
+
+  if (state.world.ciaWorm?.cutscene) {
+    ctx.fillStyle = "rgba(16, 10, 12, 0.48)";
+    ctx.fillRect(0, 0, state.width, state.height);
+    ctx.fillStyle = "#f2ebe3";
+    ctx.font = "700 28px Segoe UI";
+    ctx.textAlign = "center";
+    ctx.fillText("CIA Summoning Ritual", state.width * 0.5, state.height * 0.18);
+    ctx.font = "18px Segoe UI";
+    ctx.fillText("A portal tears open and something enormous answers.", state.width * 0.5, state.height * 0.18 + 34);
   }
 
   if (state.gameMode === "sandbox" && state.gameStarted && state.sandbox.placement && state.pointer.active) {
@@ -5332,12 +5911,14 @@ function render() {
   drawTown();
   drawDebris();
   drawBlood();
+  drawCIAWormHoles();
   drawTraps();
   drawExplosions();
   drawProjectiles();
   for (const npc of state.world.npcs) {
     drawNpc(npc);
   }
+  drawCIAWorm();
   drawPlayer();
   drawTracers();
   drawOverlay();
