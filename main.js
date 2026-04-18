@@ -11,15 +11,16 @@ const CONFIG = {
   policeBossSpawnConsumed: 50,
   policeBossSpawnKills: 20,
   policeBossHealth: 185,
-  policeBossSearchSpeed: 5.2,
-  policeBossMotorcycleSpeed: 6.4,
-  policeBossDesiredRange: 255,
-  policeBossTooCloseRange: 165,
-  policeBossDisengageTime: 5.8,
+  policeBossSearchSpeed: 8.8,
+  policeBossMotorcycleSpeed: 10.6,
+  policeBossDesiredRange: 325,
+  policeBossTooCloseRange: 210,
+  policeBossDisengageTime: 7.4,
+  policeBossRetreatDistance: 780,
   policeBossShotCooldown: 5,
   policeBossShotgunPellets: 5,
   policeBossPelletDamage: 10,
-  policeBossCircleSpeed: 1.9,
+  policeBossCircleSpeed: 2.8,
   policeBossReinforcementHealthThreshold: 0.72,
   policeBossReinforcementCooldown: 6.5,
   policeBossMaxReinforcementCalls: 3,
@@ -2738,17 +2739,17 @@ function updatePoliceBoss(npc, dt) {
   npc.reinforcementCooldown = Math.max(0, (npc.reinforcementCooldown || 0) - dt);
 
   if (touchingSwarm) {
-    const crushDamage = (3.1 + touchingSwarm.touchCount * 0.7 + Math.sqrt(state.player.followers.length + 1) * 0.03) * dt;
+    const crushDamage = (9.5 + touchingSwarm.touchCount * 2.2 + Math.sqrt(state.player.followers.length + 1) * 0.12) * dt;
     npc.health = Math.max(0, npc.health - crushDamage);
     const awayX = npc.x - state.player.x;
     const awayY = npc.y - state.player.y;
     const awayDistance = Math.hypot(awayX, awayY) || 0.0001;
-    npc.vx += (awayX / awayDistance) * (2.8 + touchingSwarm.touchCount * 0.32);
-    npc.vy += (awayY / awayDistance) * (2.8 + touchingSwarm.touchCount * 0.32);
-    npc.x += (awayX / awayDistance) * 8;
-    npc.y += (awayY / awayDistance) * 8;
+    npc.vx += (awayX / awayDistance) * (5.8 + touchingSwarm.touchCount * 0.85);
+    npc.vy += (awayY / awayDistance) * (5.8 + touchingSwarm.touchCount * 0.85);
+    npc.x += (awayX / awayDistance) * 18;
+    npc.y += (awayY / awayDistance) * 18;
     spawnBloodStamp(npc.x, npc.y, 2.2, 1, npc.vx * 0.45, npc.vy * 0.45);
-    npc.disengageTimer = Math.max(npc.disengageTimer, CONFIG.policeBossDisengageTime + 1.4);
+    npc.disengageTimer = Math.max(npc.disengageTimer, CONFIG.policeBossDisengageTime + 2.4);
     if (npc.health <= 0) {
       absorbNpc(npc);
       return;
@@ -2769,17 +2770,17 @@ function updatePoliceBoss(npc, dt) {
 
   if (npc.disengageTimer > 0) {
     const angle = Math.atan2(npc.y - state.player.y, npc.x - state.player.x) + npc.orbitDirection * 0.65;
-    const retreatDistance = CONFIG.policeBossDesiredRange + 220;
+    const retreatDistance = CONFIG.policeBossRetreatDistance;
     const retreatX = state.player.x + Math.cos(angle) * retreatDistance;
     const retreatY = state.player.y + Math.sin(angle) * retreatDistance;
-    steerEntity(npc, retreatX, retreatY, 0.14, CONFIG.policeBossSearchSpeed, dt);
+    steerEntity(npc, retreatX, retreatY, 0.22, CONFIG.policeBossSearchSpeed, dt);
     return;
   }
 
   const attackAngle = state.time * CONFIG.policeBossCircleSpeed * npc.orbitDirection + npc.orbitSeed;
   const attackX = state.player.x + Math.cos(attackAngle) * CONFIG.policeBossDesiredRange;
   const attackY = state.player.y + Math.sin(attackAngle) * (CONFIG.policeBossDesiredRange * 0.72);
-  steerEntity(npc, attackX, attackY, 0.16, CONFIG.policeBossMotorcycleSpeed, dt);
+  steerEntity(npc, attackX, attackY, 0.24, CONFIG.policeBossMotorcycleSpeed, dt);
 
   if (seesPlayer && distance <= CONFIG.policeBossDesiredRange + 70 && npc.shootCooldown <= 0) {
     shootShotgunPlayer(npc);
