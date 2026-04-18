@@ -96,6 +96,18 @@ const canvas = document.getElementById("gameCanvas");
 const ctx = canvas.getContext("2d");
 const menuScreen = document.getElementById("menuScreen");
 const playButton = document.getElementById("playButton");
+const sandboxButton = document.getElementById("sandboxButton");
+const sandboxPanel = document.getElementById("sandboxPanel");
+const sandboxCloseButton = document.getElementById("sandboxCloseButton");
+const sandboxStructuresTab = document.getElementById("sandboxStructuresTab");
+const sandboxEnemiesTab = document.getElementById("sandboxEnemiesTab");
+const sandboxSpawnList = document.getElementById("sandboxSpawnList");
+const sandboxSizeValue = document.getElementById("sandboxSizeValue");
+const sandboxPlacementLabel = document.getElementById("sandboxPlacementLabel");
+const sandboxSizeDownSmall = document.getElementById("sandboxSizeDownSmall");
+const sandboxSizeDownLarge = document.getElementById("sandboxSizeDownLarge");
+const sandboxSizeUpSmall = document.getElementById("sandboxSizeUpSmall");
+const sandboxSizeUpLarge = document.getElementById("sandboxSizeUpLarge");
 const resetButton = document.getElementById("resetButton");
 const particleCountLabel = document.getElementById("particleCount");
 
@@ -147,7 +159,39 @@ const state = {
   animationId: 0,
   gameOver: false,
   gameStarted: false,
+  gameMode: "town",
+  sandbox: {
+    menuOpen: false,
+    category: "structures",
+    placement: null,
+    arenaRadiusChunks: 2,
+  },
 };
+
+const SANDBOX_STRUCTURE_OPTIONS = [
+  { id: "home", label: "Home" },
+  { id: "apartments", label: "Apartments" },
+  { id: "marketHall", label: "Market Hall" },
+  { id: "policeStation", label: "Police Station" },
+  { id: "militaryBase", label: "Military Base" },
+  { id: "ciaBase", label: "CIA Base" },
+  { id: "park", label: "Park" },
+  { id: "tree", label: "Tree" },
+  { id: "lamp", label: "Lamp" },
+  { id: "civilianCar", label: "Civilian Car" },
+];
+
+const SANDBOX_ENEMY_OPTIONS = [
+  { id: "police", label: "Police Officer" },
+  { id: "policeSquad", label: "Police Squad" },
+  { id: "militarySoldier", label: "Army Soldier" },
+  { id: "militaryGrenadier", label: "Grenade Soldier" },
+  { id: "tank", label: "Tank" },
+  { id: "helicopter", label: "Helicopter" },
+  { id: "ciaSquad", label: "CIA Squad" },
+  { id: "alien", label: "Alien Ship" },
+  { id: "alienWing", label: "Alien Wing" },
+];
 
 function clamp(value, min, max) {
   return Math.min(Math.max(value, min), max);
@@ -180,6 +224,64 @@ function randomBetween(rng, min, max) {
 
 function randomInt(rng, min, max) {
   return Math.floor(randomBetween(rng, min, max + 1));
+}
+
+function getSandboxOptions() {
+  return state.sandbox.category === "structures" ? SANDBOX_STRUCTURE_OPTIONS : SANDBOX_ENEMY_OPTIONS;
+}
+
+function setSandboxPlacement(id) {
+  state.sandbox.placement = id;
+  updateSandboxUi();
+}
+
+function openSandboxMenu() {
+  if (state.gameMode !== "sandbox") {
+    return;
+  }
+  state.sandbox.menuOpen = true;
+  sandboxPanel.classList.remove("hidden");
+  updateSandboxUi();
+}
+
+function closeSandboxMenu() {
+  state.sandbox.menuOpen = false;
+  sandboxPanel.classList.add("hidden");
+}
+
+function updateSandboxUi() {
+  if (!sandboxPanel) {
+    return;
+  }
+
+  const allOptions = [...SANDBOX_STRUCTURE_OPTIONS, ...SANDBOX_ENEMY_OPTIONS];
+  const placementOption = allOptions.find((option) => option.id === state.sandbox.placement);
+  sandboxPanel.classList.toggle("hidden", !(state.gameStarted && state.gameMode === "sandbox" && state.sandbox.menuOpen));
+  sandboxStructuresTab.classList.toggle("active", state.sandbox.category === "structures");
+  sandboxEnemiesTab.classList.toggle("active", state.sandbox.category === "enemies");
+  sandboxSizeValue.textContent = `Consumed ${state.player.absorbedHumans}`;
+  sandboxPlacementLabel.textContent = placementOption ? `Placing: ${placementOption.label}` : "No placement selected.";
+
+  const options = getSandboxOptions();
+  if (sandboxSpawnList.dataset.category !== state.sandbox.category || sandboxSpawnList.childElementCount !== options.length) {
+    sandboxSpawnList.dataset.category = state.sandbox.category;
+    sandboxSpawnList.innerHTML = "";
+    for (const option of options) {
+      const button = document.createElement("button");
+      button.type = "button";
+      button.dataset.id = option.id;
+      button.textContent = option.label;
+      button.addEventListener("click", () => {
+        setSandboxPlacement(option.id);
+        closeSandboxMenu();
+      });
+      sandboxSpawnList.appendChild(button);
+    }
+  }
+
+  for (const button of sandboxSpawnList.children) {
+    button.classList.toggle("active", button.dataset.id === state.sandbox.placement);
+  }
 }
 
 function distanceBetween(ax, ay, bx, by) {
@@ -1081,6 +1183,68 @@ function generateChunk(cx, cy) {
   return chunk;
 }
 
+function generateSandboxChunk(cx, cy) {
+  const key = chunkKey(cx, cy);
+  const originX = cx * CONFIG.chunkSize;
+  const originY = cy * CONFIG.chunkSize;
+  const arenaRadius = state.sandbox.arenaRadiusChunks;
+  const rng = mulberry32(hash2d(cx * 97 + 11, cy * 89 - 7));
+  const chunk = {
+    key,
+    cx,
+    cy,
+    originX,
+    originY,
+    roads: [],
+    buildings: [],
+    decor: [],
+    walkTargets: [],
+    policeSpawns: [],
+    militarySpawns: [],
+    ciaSpawns: [],
+  };
+
+  if (Math.abs(cx) > arenaRadius || Math.abs(cy) > arenaRadius) {
+    addBuilding(chunk, originX, originY, CONFIG.chunkSize, CONFIG.chunkSize, "apartments", "#7f7f85");
+    return chunk;
+  }
+
+  const centerRoadX = originX + CONFIG.chunkSize * 0.5 - CONFIG.roadWidth * 0.5;
+  const centerRoadY = originY + CONFIG.chunkSize * 0.5 - CONFIG.roadWidth * 0.5;
+  chunk.roads.push(
+    { x: originX, y: centerRoadY, w: CONFIG.chunkSize, h: CONFIG.roadWidth, type: "horizontal" },
+    { x: centerRoadX, y: originY, w: CONFIG.roadWidth, h: CONFIG.chunkSize, type: "vertical" },
+  );
+
+  addDeco(chunk, { type: "plaza", x: originX + CONFIG.chunkSize * 0.5 - 84, y: originY + CONFIG.chunkSize * 0.5 - 84, w: 168, h: 168 });
+  addWalkTarget(chunk, originX + CONFIG.chunkSize * 0.25, originY + CONFIG.chunkSize * 0.25);
+  addWalkTarget(chunk, originX + CONFIG.chunkSize * 0.75, originY + CONFIG.chunkSize * 0.25);
+  addWalkTarget(chunk, originX + CONFIG.chunkSize * 0.25, originY + CONFIG.chunkSize * 0.75);
+  addWalkTarget(chunk, originX + CONFIG.chunkSize * 0.75, originY + CONFIG.chunkSize * 0.75);
+  addWalkTarget(chunk, originX + CONFIG.chunkSize * 0.5, originY + CONFIG.chunkSize * 0.5);
+
+  const wallThickness = 42;
+  if (cy === -arenaRadius) {
+    addBuilding(chunk, originX, originY, CONFIG.chunkSize, wallThickness, "home", "#9b8b81");
+  }
+  if (cy === arenaRadius) {
+    addBuilding(chunk, originX, originY + CONFIG.chunkSize - wallThickness, CONFIG.chunkSize, wallThickness, "home", "#9b8b81");
+  }
+  if (cx === -arenaRadius) {
+    addBuilding(chunk, originX, originY, wallThickness, CONFIG.chunkSize, "home", "#9b8b81");
+  }
+  if (cx === arenaRadius) {
+    addBuilding(chunk, originX + CONFIG.chunkSize - wallThickness, originY, wallThickness, CONFIG.chunkSize, "home", "#9b8b81");
+  }
+
+  for (let index = 0; index < 4; index += 1) {
+    const point = sampleRectPerimeter(chunk.roads[index % 2], rng());
+    addDeco(chunk, { type: "lamp", x: point.x + randomBetween(rng, -10, 10), y: point.y + randomBetween(rng, -10, 10) });
+  }
+
+  return chunk;
+}
+
 function sampleWalkTarget(chunk, rng) {
   if (!chunk.walkTargets.length) {
     return { x: chunk.originX + CONFIG.chunkSize * 0.5, y: chunk.originY + CONFIG.chunkSize * 0.5 };
@@ -1097,7 +1261,10 @@ function ensureChunksAroundPlayer() {
       const key = chunkKey(cx + dx, cy + dy);
       needed.add(key);
       if (!state.world.chunks.has(key)) {
-        state.world.chunks.set(key, generateChunk(cx + dx, cy + dy));
+        state.world.chunks.set(
+          key,
+          state.gameMode === "sandbox" ? generateSandboxChunk(cx + dx, cy + dy) : generateChunk(cx + dx, cy + dy),
+        );
       }
     }
   }
@@ -1151,6 +1318,9 @@ function spawnChunkPopulation(chunk) {
 }
 
 function ensureChunkPopulation() {
+  if (state.gameMode === "sandbox") {
+    return;
+  }
   const loadedKeys = new Set(state.world.chunks.keys());
   for (const chunk of state.world.chunks.values()) {
     const hasPopulation = state.world.npcs.some((npc) => npc.homeChunkKey === chunk.key && npc.type === "civilian");
@@ -1160,6 +1330,33 @@ function ensureChunkPopulation() {
   }
 
   state.world.npcs = state.world.npcs.filter((npc) => npc.alive && loadedKeys.has(npc.homeChunkKey));
+}
+
+function getOrCreateChunkForPosition(x, y) {
+  const { cx, cy } = getChunkCoords(x, y);
+  const key = chunkKey(cx, cy);
+  if (!state.world.chunks.has(key)) {
+    state.world.chunks.set(key, state.gameMode === "sandbox" ? generateSandboxChunk(cx, cy) : generateChunk(cx, cy));
+  }
+  return state.world.chunks.get(key);
+}
+
+function setPlayerConsumedHumans(nextValue) {
+  const targetConsumed = clamp(Math.round(nextValue), 0, 140);
+  state.player.absorbedHumans = targetConsumed;
+  const followerTarget = 5 + targetConsumed * CONFIG.biomatterPerHuman;
+  while (state.player.followers.length < followerTarget) {
+    gainBiomass(1, state.player.x, state.player.y);
+  }
+  while (state.player.followers.length > followerTarget) {
+    state.player.followers.pop();
+  }
+  updateHud();
+  updateSandboxUi();
+}
+
+function adjustSandboxPlayerSize(delta) {
+  setPlayerConsumedHumans(state.player.absorbedHumans + delta);
 }
 
 function desiredPoliceCount() {
@@ -1277,6 +1474,171 @@ function createAlienNpc(spawnPoint, rng) {
     trapCooldown: randomBetween(rng, 1.2, 2.4),
     altitude: 92 + rng() * 28,
   };
+}
+
+function spawnCIASquadAt(x, y) {
+  const chunk = getOrCreateChunkForPosition(x, y);
+  if (!chunk) {
+    return;
+  }
+  const rng = mulberry32(hash2d(Math.floor(x), Math.floor(y) + state.world.nextNpcId * 11));
+  const squadId = `cia-${state.world.nextNpcId}-${Math.floor(state.time * 10)}`;
+  const squadMode = rng() > 0.45 ? "driveBy" : "dismount";
+  const groupSize = 3 + (rng() > 0.7 ? 1 : 0);
+  for (let index = 0; index < groupSize; index += 1) {
+    const offset = (index - (groupSize - 1) * 0.5) * 26;
+    state.world.npcs.push({
+      id: state.world.nextNpcId,
+      type: "cia",
+      squadId,
+      squadMode,
+      x: x + offset,
+      y,
+      vx: 0,
+      vy: 0,
+      radius: 8,
+      homeChunkKey: chunk.key,
+      targetX: state.player.x,
+      targetY: state.player.y,
+      timer: 0,
+      lastSeenTimer: 0,
+      shootCooldown: randomBetween(rng, 0.1, 0.35),
+      faceX: 1,
+      faceY: 0,
+      inVehicle: true,
+      activeCar: null,
+      carColor: "#111214",
+      alive: true,
+    });
+    state.world.nextNpcId += 1;
+  }
+}
+
+function spawnSandboxEnemy(id, x, y) {
+  const chunk = getOrCreateChunkForPosition(x, y);
+  if (!chunk) {
+    return;
+  }
+  const spawnPoint = { x, y, chunkKey: chunk.key };
+  const rng = mulberry32(hash2d(Math.floor(x) + state.world.nextNpcId * 3, Math.floor(y) - state.world.nextNpcId * 5));
+
+  if (id === "police") {
+    state.world.npcs.push(createPoliceNpc(spawnPoint, rng, { inVehicle: false }));
+    state.world.nextNpcId += 1;
+    return;
+  }
+
+  if (id === "policeSquad") {
+    for (let index = 0; index < 3; index += 1) {
+      state.world.npcs.push(createPoliceNpc({ ...spawnPoint, x: x + (index - 1) * 24 }, rng, { inVehicle: index === 0 }));
+      state.world.nextNpcId += 1;
+    }
+    return;
+  }
+
+  if (id === "ciaSquad") {
+    spawnCIASquadAt(x, y);
+    return;
+  }
+
+  if (id === "alienWing") {
+    for (let index = 0; index < 3; index += 1) {
+      const alien = createAlienNpc({ ...spawnPoint, x: x + (index - 1) * 34, y: y - Math.abs(index - 1) * 12 }, rng);
+      state.world.npcs.push(alien);
+      state.world.nextNpcId += 1;
+    }
+    return;
+  }
+
+  if (id === "alien") {
+    state.world.npcs.push(createAlienNpc(spawnPoint, rng));
+    state.world.nextNpcId += 1;
+    return;
+  }
+
+  if (["militarySoldier", "militaryGrenadier", "tank", "helicopter"].includes(id)) {
+    state.world.npcs.push(createMilitaryNpc(id, spawnPoint, rng));
+    state.world.nextNpcId += 1;
+  }
+}
+
+function placeSandboxStructure(id, x, y) {
+  const chunk = getOrCreateChunkForPosition(x, y);
+  if (!chunk) {
+    return;
+  }
+
+  if (id === "tree") {
+    addDeco(chunk, { type: "tree", x, y, size: 18 });
+    return;
+  }
+
+  if (id === "lamp") {
+    addDeco(chunk, { type: "lamp", x, y });
+    return;
+  }
+
+  if (id === "civilianCar") {
+    addDeco(chunk, { type: "civilianCar", x: x - 26, y: y - 12, w: 52, h: 24, parked: true, color: "#8f4545" });
+    return;
+  }
+
+  if (id === "park") {
+    addDeco(chunk, { type: "plaza", x: x - 68, y: y - 68, w: 136, h: 136 });
+    addDeco(chunk, { type: "tree", x: x - 54, y: y - 42, size: 16 });
+    addDeco(chunk, { type: "tree", x: x + 58, y: y - 36, size: 18 });
+    addDeco(chunk, { type: "tree", x: x - 44, y: y + 48, size: 15 });
+    addDeco(chunk, { type: "tree", x: x + 48, y: y + 52, size: 17 });
+    addWalkTarget(chunk, x, y);
+    return;
+  }
+
+  if (id === "home") {
+    addBuilding(chunk, x - 58, y - 42, 116, 84, "home", "#d7b48b");
+    addWalkTarget(chunk, x, y + 56);
+    return;
+  }
+
+  if (id === "apartments") {
+    addBuilding(chunk, x - 82, y - 62, 164, 124, "apartments", "#9fa7b3");
+    addWalkTarget(chunk, x, y + 76);
+    return;
+  }
+
+  if (id === "marketHall") {
+    addBuilding(chunk, x - 92, y - 58, 184, 116, "marketHall", "#b98c66");
+    addDeco(chunk, { type: "stall", x: x - 58, y: y - 18, w: 56, h: 36, awning: "#d24b4b" });
+    addDeco(chunk, { type: "stall", x: x + 8, y: y - 18, w: 56, h: 36, awning: "#4b8dd2" });
+    addWalkTarget(chunk, x, y + 70);
+    return;
+  }
+
+  if (id === "policeStation") {
+    addBuilding(chunk, x - 88, y - 50, 176, 92, "policeStation", "#7f95ac");
+    addBuilding(chunk, x - 62, y - 30, 124, 24, "policeAnnex", "#97abc0");
+    addPoliceSpawn(chunk, x - 30, y + 58);
+    addPoliceSpawn(chunk, x + 30, y + 58);
+    addWalkTarget(chunk, x, y + 64);
+    return;
+  }
+
+  if (id === "militaryBase") {
+    addBuilding(chunk, x - 92, y - 58, 184, 104, "militaryBase", "#7e8a72");
+    addBuilding(chunk, x - 64, y - 34, 128, 24, "militaryAnnex", "#95a18b");
+    addMilitarySpawn(chunk, x - 42, y + 60);
+    addMilitarySpawn(chunk, x, y + 60);
+    addMilitarySpawn(chunk, x + 42, y + 60);
+    addWalkTarget(chunk, x, y + 64);
+    return;
+  }
+
+  if (id === "ciaBase") {
+    addBuilding(chunk, x - 88, y - 52, 176, 88, "ciaBase", "#5e6067");
+    addBuilding(chunk, x - 60, y - 30, 120, 20, "ciaAnnex", "#787b84");
+    addCIASpawn(chunk, x - 18, y + 50);
+    addCIASpawn(chunk, x + 18, y + 50);
+    addWalkTarget(chunk, x, y + 58);
+  }
 }
 
 function spawnMilitary(type) {
@@ -1576,6 +1938,30 @@ function getSquadMates(type, squadId) {
   return state.world.npcs.filter((npc) => npc.type === type && npc.squadId === squadId && npc.alive);
 }
 
+function createPoliceNpc(spawnPoint, rng, options = {}) {
+  return {
+    id: state.world.nextNpcId,
+    type: "police",
+    x: spawnPoint.x,
+    y: spawnPoint.y,
+    vx: 0,
+    vy: 0,
+    radius: 8,
+    homeChunkKey: spawnPoint.chunkKey,
+    targetX: state.player.x,
+    targetY: state.player.y,
+    timer: 0,
+    lastSeenTimer: 0,
+    shootCooldown: randomBetween(rng, 0.2, 0.7),
+    faceX: options.faceX ?? -1,
+    faceY: options.faceY ?? 0,
+    inVehicle: options.inVehicle ?? (rng() > 0.28),
+    activeCar: null,
+    carColor: "#1d3156",
+    alive: true,
+  };
+}
+
 function spawnPolice() {
   const { cx, cy } = getChunkCoords(state.player.x, state.player.y);
   const rng = mulberry32(hash2d(cx + state.world.nextNpcId, cy - state.world.nextNpcId));
@@ -1592,27 +1978,7 @@ function spawnPolice() {
     return false;
   }
 
-  state.world.npcs.push({
-    id: state.world.nextNpcId,
-    type: "police",
-    x: spawnPoint.x,
-    y: spawnPoint.y,
-    vx: 0,
-    vy: 0,
-    radius: 8,
-    homeChunkKey: chunk.key,
-    targetX: state.player.x,
-    targetY: state.player.y,
-    timer: 0,
-    lastSeenTimer: 0,
-    shootCooldown: randomBetween(rng, 0.2, 0.7),
-    faceX: -1,
-    faceY: 0,
-    inVehicle: rng() > 0.28,
-    activeCar: null,
-    carColor: "#1d3156",
-    alive: true,
-  });
+  state.world.npcs.push(createPoliceNpc(spawnPoint, rng));
   state.world.nextNpcId += 1;
   return true;
 }
@@ -3051,6 +3417,10 @@ function updateNpcs(dt) {
     }
   }
 
+  if (state.gameMode === "sandbox") {
+    return;
+  }
+
   state.world.alert = clamp(state.world.alert - CONFIG.alertDecayPerSecond * dt, 0, 100);
   state.world.policeSpawnCooldown -= dt;
   state.world.militarySpawnCooldown -= dt;
@@ -3454,13 +3824,22 @@ function resetGame() {
   state.pointer.y = state.height * 0.5;
 
   ensureChunksAroundPlayer();
-  ensureChunkPopulation();
+  if (state.gameMode !== "sandbox") {
+    ensureChunkPopulation();
+  }
+  resetButton.textContent = state.gameMode === "sandbox" ? "Reset Arena" : "Reset Town";
   updateHud();
+  updateSandboxUi();
 }
 
 function updateHud() {
   if (!state.gameStarted) {
     particleCountLabel.textContent = "Press Play to enter the town.";
+    return;
+  }
+  if (state.gameMode === "sandbox") {
+    particleCountLabel.textContent = `Sandbox | Health ${Math.round(state.player.health)}/${Math.round(state.player.maxHealth)} | Consumed ${state.player.absorbedHumans} | Press F for spawn menu`;
+    updateSandboxUi();
     return;
   }
   const militaryCount =
@@ -3472,6 +3851,7 @@ function updateHud() {
   const alienCount = countNpcsByType("alien");
   const dayNight = getDayNightState();
   particleCountLabel.textContent = `Health ${Math.round(state.player.health)}/${Math.round(state.player.maxHealth)} | Alert ${Math.round(state.world.alert)} | ${dayNight.label} | Consumed ${state.player.absorbedHumans} | Police ${countNpcsByType("police")} | Military ${militaryCount} | CIA ${ciaCount} | Aliens ${alienCount} | Morph ${state.player.morphName}`;
+  updateSandboxUi();
 }
 
 // SECTION: rendering
@@ -4158,7 +4538,20 @@ function drawOverlay() {
     ctx.textAlign = "center";
     ctx.fillText("The Swarm Was Put Down", state.width * 0.5, state.height * 0.5 - 12);
     ctx.font = "18px Segoe UI";
-    ctx.fillText("Press Reset Town to try again.", state.width * 0.5, state.height * 0.5 + 22);
+    ctx.fillText(`Press ${state.gameMode === "sandbox" ? "Reset Arena" : "Reset Town"} to try again.`, state.width * 0.5, state.height * 0.5 + 22);
+  }
+
+  if (state.gameMode === "sandbox" && state.gameStarted && state.sandbox.placement && state.pointer.active) {
+    const color = state.sandbox.category === "structures" ? "rgba(170, 16, 16, 0.32)" : "rgba(42, 98, 182, 0.28)";
+    ctx.fillStyle = color;
+    ctx.beginPath();
+    ctx.arc(state.pointer.x, state.pointer.y, 26, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.strokeStyle = color.replace("0.32", "0.78").replace("0.28", "0.72");
+    ctx.lineWidth = 2;
+    ctx.beginPath();
+    ctx.arc(state.pointer.x, state.pointer.y, 26, 0, Math.PI * 2);
+    ctx.stroke();
   }
 }
 
@@ -4177,9 +4570,18 @@ function render() {
   drawOverlay();
 }
 
-function startGame() {
+function startGame(mode = "town") {
+  state.gameMode = mode;
   state.gameStarted = true;
   menuScreen.classList.add("hidden");
+  state.sandbox.category = "structures";
+  state.sandbox.placement = null;
+  if (mode === "sandbox") {
+    state.sandbox.menuOpen = true;
+  } else {
+    state.sandbox.menuOpen = false;
+    state.sandbox.placement = null;
+  }
   ensureAudio();
   resetGame();
 }
@@ -4229,6 +4631,14 @@ canvas.addEventListener("pointerdown", (event) => {
   }
   ensureAudio();
   updatePointerFromEvent(event);
+  if (state.gameMode === "sandbox" && state.sandbox.placement) {
+    const worldPoint = screenToWorld(state.pointer.x, state.pointer.y);
+    if (state.sandbox.category === "structures") {
+      placeSandboxStructure(state.sandbox.placement, worldPoint.x, worldPoint.y);
+    } else {
+      spawnSandboxEnemy(state.sandbox.placement, worldPoint.x, worldPoint.y);
+    }
+  }
 });
 canvas.addEventListener("pointerenter", updatePointerFromEvent);
 canvas.addEventListener("pointerleave", () => {
@@ -4243,6 +4653,14 @@ window.addEventListener("keydown", (event) => {
     return;
   }
   ensureAudio();
+  if (state.gameMode === "sandbox" && event.key.toLowerCase() === "f") {
+    if (state.sandbox.menuOpen) {
+      closeSandboxMenu();
+    } else {
+      openSandboxMenu();
+    }
+    return;
+  }
   if (event.key.toLowerCase() === "r") {
     resetGame();
   }
@@ -4251,6 +4669,29 @@ window.addEventListener("keydown", (event) => {
 playButton.addEventListener("click", () => {
   startGame();
 });
+
+sandboxButton.addEventListener("click", () => {
+  startGame("sandbox");
+});
+
+sandboxCloseButton.addEventListener("click", () => {
+  closeSandboxMenu();
+});
+
+sandboxStructuresTab.addEventListener("click", () => {
+  state.sandbox.category = "structures";
+  updateSandboxUi();
+});
+
+sandboxEnemiesTab.addEventListener("click", () => {
+  state.sandbox.category = "enemies";
+  updateSandboxUi();
+});
+
+sandboxSizeDownSmall.addEventListener("click", () => adjustSandboxPlayerSize(-5));
+sandboxSizeDownLarge.addEventListener("click", () => adjustSandboxPlayerSize(-20));
+sandboxSizeUpSmall.addEventListener("click", () => adjustSandboxPlayerSize(5));
+sandboxSizeUpLarge.addEventListener("click", () => adjustSandboxPlayerSize(20));
 
 resetButton.addEventListener("click", () => {
   ensureAudio();

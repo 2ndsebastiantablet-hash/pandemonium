@@ -12,10 +12,36 @@
       <div class="menu-card">
         <p class="menu-kicker">A Shape-Shifting Town Horror</p>
         <h1>Pandemonium</h1>
-        <button id="playButton" type="button">Play</button>
+        <div class="menu-actions">
+          <button id="playButton" type="button">Play</button>
+          <button id="sandboxButton" type="button">Sandbox</button>
+        </div>
       </div>
     </section>
     <canvas id="gameCanvas" aria-label="Symbiote particle game"></canvas>
+    <section id="sandboxPanel" class="sandbox-panel hidden" aria-label="Sandbox controls">
+      <div class="sandbox-header">
+        <h2>Sandbox</h2>
+        <button id="sandboxCloseButton" type="button">Close</button>
+      </div>
+      <p class="sandbox-copy">Press <strong>F</strong> to toggle this menu. Pick a category, choose something to place, then click in the arena.</p>
+      <div class="sandbox-groups">
+        <button id="sandboxStructuresTab" type="button" class="sandbox-tab active">Structures</button>
+        <button id="sandboxEnemiesTab" type="button" class="sandbox-tab">Enemies</button>
+      </div>
+      <div id="sandboxSpawnList" class="sandbox-list"></div>
+      <div class="sandbox-size">
+        <h3>Swarm Size</h3>
+        <div class="sandbox-size-row">
+          <button id="sandboxSizeDownSmall" type="button">-5</button>
+          <button id="sandboxSizeDownLarge" type="button">-20</button>
+          <span id="sandboxSizeValue">Consumed 0</span>
+          <button id="sandboxSizeUpSmall" type="button">+5</button>
+          <button id="sandboxSizeUpLarge" type="button">+20</button>
+        </div>
+      </div>
+      <p id="sandboxPlacementLabel" class="sandbox-placement">No placement selected.</p>
+    </section>
     <section class="hud">
       <h1>Pandemonium</h1>
       <p>Guide the shape-shifting swarm through an infinite town, hide behind buildings, absorb civilians to grow, and avoid police gunfire. Click once to wake the soundscape in Chrome.</p>
