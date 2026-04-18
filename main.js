@@ -45,6 +45,24 @@ const CONFIG = {
   policeSpawnThreshold: 22,
   policeSpawnCooldown: 4.5,
   militarySpawnCooldown: 3.2,
+  militaryBossSpawnConsumed: 68,
+  militaryBossSpawnKills: 25,
+  militaryBossHealth: 320,
+  militaryBossWalkSpeed: 1.42,
+  militaryBossSearchSpeed: 1.18,
+  militaryBossChargeSpeed: 8.6,
+  militaryBossRetreatSpeed: 4.9,
+  militaryBossVision: 500,
+  militaryBossJumpCooldown: 8.4,
+  militaryBossChargeCooldown: 8.8,
+  militaryBossChargeWindup: 2,
+  militaryBossRetreatDistance: 760,
+  militaryBossReinforcementCooldown: 10.5,
+  militaryBossSlamRadius: 128,
+  militaryBossRocketRangeMin: 290,
+  militaryBossMinigunRange: 340,
+  militaryBossFlameRange: 185,
+  militaryBossChainsawRange: 96,
   damagePerShot: 8,
   shotCooldown: 1.1,
   tracerLifetime: 0.16,
@@ -167,6 +185,8 @@ const state = {
     playerSlowFactor: 1,
     policeDeathsTotal: 0,
     policeBossSpawned: false,
+    militaryDeathsTotal: 0,
+    militaryBossSpawned: false,
   },
   audio: {
     ctx: null,
@@ -207,6 +227,7 @@ const SANDBOX_ENEMY_OPTIONS = [
   { id: "policeBoss", label: "Police Mini Boss" },
   { id: "militarySoldier", label: "Army Soldier" },
   { id: "militaryGrenadier", label: "Grenade Soldier" },
+  { id: "militaryBoss", label: "Military Boss" },
   { id: "tank", label: "Tank" },
   { id: "helicopter", label: "Helicopter" },
   { id: "ciaSquad", label: "CIA Squad" },
@@ -1400,6 +1421,20 @@ function hasPoliceBoss() {
   return state.world.npcs.some((npc) => npc.type === "policeBoss" && npc.alive);
 }
 
+function shouldSpawnMilitaryBoss() {
+  if (state.world.militaryBossSpawned) {
+    return false;
+  }
+  return (
+    state.player.absorbedHumans >= CONFIG.militaryBossSpawnConsumed ||
+    state.world.militaryDeathsTotal >= CONFIG.militaryBossSpawnKills
+  );
+}
+
+function hasMilitaryBoss() {
+  return state.world.npcs.some((npc) => npc.type === "militaryBoss" && npc.alive);
+}
+
 function desiredMilitaryCounts() {
   const size = state.player.absorbedHumans;
   return {
@@ -1463,6 +1498,63 @@ function createPoliceBossNpc(spawnPoint, rng) {
     reinforcementCalls: 0,
     reinforcementCooldown: randomBetween(rng, 2.4, 4.2),
     title: "Motorcycle Sergeant",
+  };
+}
+
+function createMilitaryBossNpc(spawnPoint, rng) {
+  const armWeapons = ["flamethrower", "minigun", "rocket", "chainsaw"];
+  const armMounts = [
+    { x: -20, y: -12 },
+    { x: 20, y: -12 },
+    { x: -20, y: 14 },
+    { x: 20, y: 14 },
+  ];
+  return {
+    id: state.world.nextNpcId,
+    type: "militaryBoss",
+    x: spawnPoint.x,
+    y: spawnPoint.y,
+    vx: 0,
+    vy: 0,
+    radius: 28,
+    homeChunkKey: spawnPoint.chunkKey,
+    targetX: state.player.x,
+    targetY: state.player.y,
+    timer: 0,
+    lastSeenTimer: 0,
+    faceX: -1,
+    faceY: 0,
+    alive: true,
+    health: CONFIG.militaryBossHealth,
+    maxHealth: CONFIG.militaryBossHealth,
+    arms: armMounts.map((mount, index) => ({
+      weapon: armWeapons[randomInt(rng, 0, armWeapons.length - 1)],
+      mountX: mount.x,
+      mountY: mount.y,
+      length: randomBetween(rng, 34, 50),
+      swingOffset: randomBetween(rng, 0, Math.PI * 2),
+      cooldown: randomBetween(rng, 0.15, 1.2),
+      side: index % 2 === 0 ? -1 : 1,
+    })),
+    mode: "wander",
+    searchTimer: randomBetween(rng, 1.1, 2.4),
+    attackTimer: 0,
+    chargeCooldown: randomBetween(rng, 2.6, 4.4),
+    jumpCooldown: randomBetween(rng, 2.4, 4.8),
+    reinforcementCooldown: randomBetween(rng, 3.4, 5.2),
+    retreatThresholds: [0.74, 0.5, 0.26],
+    retreatThresholdIndex: 0,
+    retreatTargetX: spawnPoint.x,
+    retreatTargetY: spawnPoint.y,
+    retreatTimer: 0,
+    bodyDamageCooldown: 0,
+    chargeDirX: 1,
+    chargeDirY: 0,
+    slamStartX: spawnPoint.x,
+    slamStartY: spawnPoint.y,
+    slamTargetX: spawnPoint.x,
+    slamTargetY: spawnPoint.y,
+    altitude: 0,
   };
 }
 
@@ -1608,6 +1700,11 @@ function spawnSandboxEnemy(id, x, y) {
     return;
   }
 
+  if (id === "militaryBoss") {
+    spawnMilitaryBossAt(x, y);
+    return;
+  }
+
   if (id === "ciaSquad") {
     spawnCIASquadAt(x, y);
     return;
@@ -1725,6 +1822,32 @@ function spawnMilitary(type) {
   state.world.npcs.push(createMilitaryNpc(type, spawnPoint, rng));
   state.world.nextNpcId += 1;
   return true;
+}
+
+function spawnMilitaryBossAt(x, y) {
+  const chunk = getOrCreateChunkForPosition(x, y);
+  if (!chunk) {
+    return false;
+  }
+  const spawnPoint = { x, y, chunkKey: chunk.key };
+  const rng = mulberry32(hash2d(Math.floor(x) * 23 + state.world.nextNpcId, Math.floor(y) * 29 - state.world.nextNpcId));
+  state.world.npcs.push(createMilitaryBossNpc(spawnPoint, rng));
+  state.world.nextNpcId += 1;
+  state.world.militaryBossSpawned = true;
+  state.world.alert = clamp(state.world.alert + 28, 0, 100);
+  return true;
+}
+
+function spawnMilitaryBoss() {
+  const militarySpawns = getLoadedMilitarySpawns().filter((spawn) => distanceBetween(spawn.x, spawn.y, state.player.x, state.player.y) > 320);
+  const fallbackSpawns = getLoadedWalkSpawns(320);
+  const sourcePool = militarySpawns.length ? militarySpawns : fallbackSpawns;
+  if (!sourcePool.length) {
+    return false;
+  }
+  const rng = mulberry32(hash2d(state.world.nextNpcId * 37, Math.floor(state.time * 21) + state.player.absorbedHumans * 9));
+  const spawnPoint = sourcePool[randomInt(rng, 0, sourcePool.length - 1)];
+  return spawnMilitaryBossAt(spawnPoint.x, spawnPoint.y);
 }
 
 function spawnAlien() {
@@ -2387,9 +2510,13 @@ function absorbNpc(npc) {
   if (npc.type === "police" || npc.type === "policeBoss") {
     state.world.policeDeathsTotal += 1;
   }
+  if (["militarySoldier", "militaryGrenadier", "tank", "helicopter", "militaryBoss"].includes(npc.type)) {
+    state.world.militaryDeathsTotal += npc.type === "militaryBoss" ? 6 : 1;
+  }
   npc.alive = false;
   state.player.absorbedHumans += 1;
   const biomass =
+    npc.type === "militaryBoss" ? CONFIG.biomatterPerHuman + 12 :
     npc.type === "tank" ? CONFIG.biomatterPerHuman + 4 :
     npc.type === "helicopter" ? CONFIG.biomatterPerHuman + 3 :
     npc.type === "policeBoss" ? CONFIG.biomatterPerHuman + 6 :
@@ -2397,6 +2524,7 @@ function absorbNpc(npc) {
     CONFIG.biomatterPerHuman;
   gainBiomass(biomass, npc.x, npc.y);
   const alertGain =
+    npc.type === "militaryBoss" ? 48 :
     npc.type === "policeBoss" ? 34 :
     npc.type === "police" ? 18 :
     npc.type === "militarySoldier" || npc.type === "militaryGrenadier" ? 22 :
@@ -2793,6 +2921,284 @@ function updatePoliceBoss(npc, dt) {
     shootShotgunPlayer(npc);
     npc.shootCooldown = CONFIG.policeBossShotCooldown;
   }
+}
+
+function chooseMilitaryBossWanderTarget(npc) {
+  const militarySpawns = getLoadedMilitarySpawns();
+  const pool = militarySpawns.length ? militarySpawns : getLoadedWalkSpawns(0);
+  if (!pool.length) {
+    return { x: npc.x, y: npc.y };
+  }
+  const rng = mulberry32(hash2d(npc.id * 19, Math.floor(state.time * 9) + npc.retreatThresholdIndex * 47));
+  return pool[randomInt(rng, 0, pool.length - 1)];
+}
+
+function setMilitaryBossRetreat(npc) {
+  const angle = Math.atan2(npc.y - state.player.y, npc.x - state.player.x) + (Math.random() - 0.5) * 0.8;
+  npc.retreatTargetX = state.player.x + Math.cos(angle) * CONFIG.militaryBossRetreatDistance;
+  npc.retreatTargetY = state.player.y + Math.sin(angle) * CONFIG.militaryBossRetreatDistance;
+  npc.retreatTimer = 6.4;
+  npc.mode = "retreat";
+  npc.lastSeenTimer = 0;
+  npc.targetX = npc.retreatTargetX;
+  npc.targetY = npc.retreatTargetY;
+}
+
+function callMilitaryBossReinforcements(npc) {
+  if (npc.reinforcementCooldown > 0) {
+    return;
+  }
+  npc.reinforcementCooldown = CONFIG.militaryBossReinforcementCooldown;
+  const types = ["militarySoldier", "militaryGrenadier", "tank", "helicopter"];
+  const rng = mulberry32(hash2d(npc.id * 41, Math.floor(state.time * 10) + state.world.nextNpcId));
+  const count = 3 + Math.min(2, npc.retreatThresholdIndex);
+  for (let index = 0; index < count; index += 1) {
+    const type = index === count - 1 && npc.retreatThresholdIndex >= 2 ? "tank" : types[randomInt(rng, 0, types.length - 1)];
+    const angle = randomBetween(rng, 0, Math.PI * 2);
+    const offset = randomBetween(rng, 80, 160);
+    const x = npc.x + Math.cos(angle) * offset;
+    const y = npc.y + Math.sin(angle) * offset;
+    const chunk = getOrCreateChunkForPosition(x, y);
+    if (!chunk) {
+      continue;
+    }
+    state.world.npcs.push(createMilitaryNpc(type, { x, y, chunkKey: chunk.key }, rng));
+    state.world.nextNpcId += 1;
+  }
+}
+
+function militaryBossSlamImpact(npc) {
+  explodeAt(npc.slamTargetX, npc.slamTargetY, CONFIG.militaryBossSlamRadius, 12, "#ff925a");
+  const playerDistance = distanceBetween(npc.slamTargetX, npc.slamTargetY, state.player.x, state.player.y);
+  if (playerDistance <= CONFIG.militaryBossSlamRadius + 24) {
+    const dx = state.player.x - npc.slamTargetX;
+    const dy = state.player.y - npc.slamTargetY;
+    const distance = Math.hypot(dx, dy) || 0.0001;
+    const blastForce = playerDistance <= 48 ? 4.8 : 3.2;
+    state.player.vx += (dx / distance) * blastForce;
+    state.player.vy += (dy / distance) * blastForce;
+    if (playerDistance <= 48) {
+      damagePlayer(28, npc.slamTargetX, npc.slamTargetY, 2.3);
+    } else {
+      damagePlayer(14, npc.slamTargetX, npc.slamTargetY, 1.6);
+    }
+  }
+  spawnDebrisBurst(npc.slamTargetX, npc.slamTargetY, "#7d8289", 14, 0, 0, 6);
+  setMilitaryBossRetreat(npc);
+}
+
+function updateMilitaryBossArms(npc, dt, seesPlayer, distance) {
+  if (!seesPlayer) {
+    return;
+  }
+  for (const arm of npc.arms) {
+    arm.cooldown = Math.max(0, arm.cooldown - dt);
+    if (arm.weapon === "chainsaw") {
+      if (distance <= CONFIG.militaryBossChainsawRange && arm.cooldown <= 0) {
+        damagePlayer(12, npc.x, npc.y, 1.5);
+        spawnBloodStamp(state.player.x, state.player.y, 4.2, 1, state.player.vx * 0.8, state.player.vy * 0.8);
+        arm.cooldown = 0.72;
+      }
+      continue;
+    }
+
+    if (arm.weapon === "flamethrower") {
+      if (distance > CONFIG.militaryBossChainsawRange && distance <= CONFIG.militaryBossFlameRange && arm.cooldown <= 0) {
+        shootPlayer(npc, {
+          damage: 4.8,
+          color: "rgba(255, 118, 62, 0.95)",
+          width: 5.4,
+          life: 0.16,
+          push: 0.22,
+          muzzleDistance: 28,
+          jitter: 0.12,
+        });
+        arm.cooldown = 0.22;
+      }
+      continue;
+    }
+
+    if (arm.weapon === "minigun") {
+      if (distance > CONFIG.militaryBossFlameRange * 0.9 && distance <= CONFIG.militaryBossMinigunRange && arm.cooldown <= 0) {
+        shootPlayer(npc, {
+          damage: 4.2,
+          color: "rgba(255, 214, 132, 1)",
+          width: 2.2,
+          life: 0.09,
+          push: 0.28,
+          muzzleDistance: 30,
+          jitter: 0.06,
+        });
+        arm.cooldown = 0.11;
+      }
+      continue;
+    }
+
+    if (arm.weapon === "rocket" && distance >= CONFIG.militaryBossRocketRangeMin && arm.cooldown <= 0) {
+      launchExplosive(npc, {
+        kind: "mechRocket",
+        offset: 30,
+        speed: CONFIG.grenadeSpeed * 1.25,
+        life: 1.35,
+        radius: 7,
+        blastRadius: CONFIG.grenadeBlastRadius + 18,
+        damage: CONFIG.grenadeDamage + 10,
+        color: "#ff8e63",
+      });
+      arm.cooldown = 1.95;
+    }
+  }
+}
+
+function updateMilitaryBoss(npc, dt) {
+  const distance = distanceBetween(npc.x, npc.y, state.player.x, state.player.y);
+  const touchingSwarm = getNpcSwarmContact(npc);
+  const directBodyContact = distance <= npc.radius + state.player.radius + 12;
+  const seesPlayer = canSeePlayer(npc, CONFIG.militaryBossVision);
+
+  npc.reinforcementCooldown = Math.max(0, npc.reinforcementCooldown - dt);
+  npc.chargeCooldown = Math.max(0, npc.chargeCooldown - dt);
+  npc.jumpCooldown = Math.max(0, npc.jumpCooldown - dt);
+  npc.bodyDamageCooldown = Math.max(0, npc.bodyDamageCooldown - dt);
+
+  if (touchingSwarm || directBodyContact) {
+    const touchCount = touchingSwarm ? touchingSwarm.touchCount : 1;
+    const damage = (6.2 + touchCount * 1.15 + (directBodyContact ? 5 : 0)) * dt;
+    npc.health = Math.max(0, npc.health - damage);
+    npc.wasGrabbedBySwarm = true;
+    if (npc.health <= 0) {
+      absorbNpc(npc);
+      return;
+    }
+  }
+
+  if (npc.retreatThresholdIndex < npc.retreatThresholds.length && npc.health <= npc.maxHealth * npc.retreatThresholds[npc.retreatThresholdIndex]) {
+    npc.retreatThresholdIndex += 1;
+    callMilitaryBossReinforcements(npc);
+    setMilitaryBossRetreat(npc);
+  }
+
+  if (seesPlayer) {
+    npc.lastSeenTimer = 6.5;
+    npc.targetX = state.player.x;
+    npc.targetY = state.player.y;
+    state.world.alert = clamp(state.world.alert + 30 * dt, 0, 100);
+  } else {
+    npc.lastSeenTimer = Math.max(0, npc.lastSeenTimer - dt);
+  }
+
+  const aware = seesPlayer || npc.lastSeenTimer > 0;
+
+  if (npc.mode === "retreat") {
+    npc.retreatTimer = Math.max(0, npc.retreatTimer - dt);
+    steerEntity(npc, npc.retreatTargetX, npc.retreatTargetY, 0.13, CONFIG.militaryBossRetreatSpeed, dt);
+    if (npc.retreatTimer <= 0 || distanceBetween(npc.x, npc.y, npc.retreatTargetX, npc.retreatTargetY) < 80) {
+      npc.mode = "wander";
+      npc.searchTimer = 0;
+    }
+    return;
+  }
+
+  if (npc.mode === "chargeWindup") {
+    npc.attackTimer -= dt;
+    npc.vx *= 0.82;
+    npc.vy *= 0.82;
+    if (npc.attackTimer <= 0) {
+      npc.mode = "charge";
+      npc.attackTimer = 0.8;
+      const dx = npc.targetX - npc.x;
+      const dy = npc.targetY - npc.y;
+      const length = Math.hypot(dx, dy) || 0.0001;
+      npc.chargeDirX = dx / length;
+      npc.chargeDirY = dy / length;
+      npc.faceX = npc.chargeDirX;
+      npc.faceY = npc.chargeDirY;
+    }
+    return;
+  }
+
+  if (npc.mode === "charge") {
+    npc.attackTimer -= dt;
+    npc.vx += npc.chargeDirX * 0.4 * dt * 60;
+    npc.vy += npc.chargeDirY * 0.4 * dt * 60;
+    const speed = Math.hypot(npc.vx, npc.vy) || 0.0001;
+    if (speed > CONFIG.militaryBossChargeSpeed) {
+      const factor = CONFIG.militaryBossChargeSpeed / speed;
+      npc.vx *= factor;
+      npc.vy *= factor;
+    }
+    npc.x += npc.vx;
+    npc.y += npc.vy;
+    resolveEntityAgainstBuildings(npc, npc.radius);
+    if (distanceBetween(npc.x, npc.y, state.player.x, state.player.y) <= npc.radius + state.player.radius + 10) {
+      damagePlayer(26, npc.x, npc.y, 2.6);
+      setMilitaryBossRetreat(npc);
+      npc.chargeCooldown = CONFIG.militaryBossChargeCooldown;
+      return;
+    }
+    if (npc.attackTimer <= 0) {
+      npc.mode = "engage";
+      npc.chargeCooldown = CONFIG.militaryBossChargeCooldown;
+    }
+    return;
+  }
+
+  if (npc.mode === "slam") {
+    npc.attackTimer -= dt;
+    const progress = 1 - npc.attackTimer / 1.08;
+    npc.altitude =
+      progress < 0.45
+        ? lerp(0, 110, progress / 0.45)
+        : lerp(110, 0, (progress - 0.45) / 0.55);
+    npc.x = lerp(npc.slamStartX, npc.slamTargetX, clamp(progress, 0, 1));
+    npc.y = lerp(npc.slamStartY, npc.slamTargetY, clamp(progress, 0, 1));
+    if (npc.attackTimer <= 0) {
+      npc.altitude = 0;
+      militaryBossSlamImpact(npc);
+      npc.jumpCooldown = CONFIG.militaryBossJumpCooldown;
+    }
+    return;
+  }
+
+  if (aware) {
+    if (npc.jumpCooldown <= 0 && distance <= 220) {
+      npc.mode = "slam";
+      npc.attackTimer = 1.08;
+      npc.slamStartX = npc.x;
+      npc.slamStartY = npc.y;
+      npc.slamTargetX = state.player.x + state.player.vx * 18;
+      npc.slamTargetY = state.player.y + state.player.vy * 18;
+      npc.altitude = 0;
+      return;
+    }
+
+    if (npc.chargeCooldown <= 0 && distance > 120 && distance < 340) {
+      npc.mode = "chargeWindup";
+      npc.attackTimer = CONFIG.militaryBossChargeWindup;
+      npc.targetX = state.player.x;
+      npc.targetY = state.player.y;
+      return;
+    }
+
+    steerEntity(npc, npc.targetX, npc.targetY, 0.09, CONFIG.militaryBossWalkSpeed, dt);
+    updateMilitaryBossArms(npc, dt, aware, distance);
+    if (distance <= npc.radius + state.player.radius + 8 && npc.bodyDamageCooldown <= 0) {
+      damagePlayer(10, npc.x, npc.y, 1.4);
+      npc.bodyDamageCooldown = 0.6;
+    }
+    npc.mode = "engage";
+    return;
+  }
+
+  npc.mode = "wander";
+  npc.searchTimer -= dt;
+  if (npc.searchTimer <= 0 || distanceBetween(npc.x, npc.y, npc.targetX, npc.targetY) < 22) {
+    const target = chooseMilitaryBossWanderTarget(npc);
+    npc.targetX = target.x;
+    npc.targetY = target.y;
+    npc.searchTimer = 1.8 + Math.random() * 2.6;
+  }
+  steerEntity(npc, npc.targetX, npc.targetY, 0.06, CONFIG.militaryBossSearchSpeed, dt);
 }
 
 function updateMilitarySoldier(npc, dt) {
@@ -3646,6 +4052,8 @@ function updateNpcs(dt) {
       updateMilitarySoldier(npc, dt);
     } else if (npc.type === "militaryGrenadier") {
       updateMilitaryGrenadier(npc, dt);
+    } else if (npc.type === "militaryBoss") {
+      updateMilitaryBoss(npc, dt);
     } else if (npc.type === "tank") {
       updateTank(npc, dt);
     } else if (npc.type === "cia") {
@@ -3677,6 +4085,10 @@ function updateNpcs(dt) {
 
   if (shouldSpawnPoliceBoss() && !hasPoliceBoss()) {
     spawnPoliceBoss();
+  }
+
+  if (shouldSpawnMilitaryBoss() && !hasMilitaryBoss()) {
+    spawnMilitaryBoss();
   }
 
   if (state.world.militarySpawnCooldown <= 0) {
@@ -4046,6 +4458,8 @@ function resetGame() {
   state.world.playerSlowFactor = 1;
   state.world.policeDeathsTotal = 0;
   state.world.policeBossSpawned = false;
+  state.world.militaryDeathsTotal = 0;
+  state.world.militaryBossSpawned = false;
   state.time = 0;
   state.lastTime = 0;
   state.gameOver = false;
@@ -4091,6 +4505,7 @@ function updateHud() {
   const militaryCount =
     countNpcsByType("militarySoldier") +
     countNpcsByType("militaryGrenadier") +
+    countNpcsByType("militaryBoss") +
     countNpcsByType("tank") +
     countNpcsByType("helicopter");
   const ciaCount = countNpcsByType("cia");
@@ -4571,6 +4986,67 @@ function drawNpc(npc) {
     ctx.stroke();
     ctx.fillStyle = "#1a1d24";
     ctx.fillRect(screen.x - 4, bodyY + 5, 8, 3);
+  } else if (npc.type === "militaryBoss") {
+    const faceX = npc.faceX || 1;
+    const faceY = npc.faceY || 0;
+    const sideX = -faceY;
+    const sideY = faceX;
+    const altitude = npc.altitude || 0;
+    const bodyY = screen.y - altitude * 0.42;
+    const shadowY = screen.y + altitude * 0.08;
+    ctx.fillStyle = "rgba(0, 0, 0, 0.18)";
+    ctx.beginPath();
+    ctx.ellipse(screen.x, shadowY + 14, 34, 13, 0, 0, Math.PI * 2);
+    ctx.fill();
+
+    for (const arm of npc.arms) {
+      const swing = Math.sin(state.time * 2.8 + arm.swingOffset) * 0.45;
+      const mountX = screen.x + sideX * arm.mountX + faceX * arm.mountY;
+      const mountY = bodyY + sideY * arm.mountX + faceY * arm.mountY;
+      const aimAngle = Math.atan2(faceY, faceX) + swing + arm.side * 0.28;
+      const tipX = mountX + Math.cos(aimAngle) * arm.length;
+      const tipY = mountY + Math.sin(aimAngle) * arm.length;
+      ctx.strokeStyle = "#515962";
+      ctx.lineWidth = 5;
+      ctx.beginPath();
+      ctx.moveTo(mountX, mountY);
+      ctx.lineTo(lerp(mountX, tipX, 0.46) + arm.side * 7, lerp(mountY, tipY, 0.46) - 4);
+      ctx.lineTo(tipX, tipY);
+      ctx.stroke();
+      ctx.fillStyle =
+        arm.weapon === "flamethrower" ? "#ff8a45" :
+        arm.weapon === "minigun" ? "#d8c27f" :
+        arm.weapon === "rocket" ? "#9fb06e" :
+        "#8d8d8d";
+      ctx.fillRect(tipX - 5, tipY - 5, 10, 10);
+      if (arm.weapon === "chainsaw") {
+        ctx.fillStyle = "#d8d8d8";
+        ctx.fillRect(tipX + faceX * 2 - 6, tipY + faceY * 2 - 2, 12, 4);
+      }
+    }
+
+    ctx.fillStyle = "#59616c";
+    ctx.fillRect(screen.x - 24, bodyY - 18, 48, 52);
+    ctx.fillStyle = "#737b87";
+    ctx.fillRect(screen.x - 18, bodyY - 30, 36, 20);
+    ctx.fillStyle = "rgba(190, 210, 220, 0.45)";
+    ctx.fillRect(screen.x - 12, bodyY - 25, 24, 14);
+    ctx.fillStyle = "#c7b199";
+    ctx.beginPath();
+    ctx.arc(screen.x, bodyY - 18, 3.8, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.fillStyle = "#35424f";
+    ctx.fillRect(screen.x - 4, bodyY - 14, 8, 10);
+    ctx.fillStyle = "#434b54";
+    ctx.fillRect(screen.x - 30, bodyY + 6, 12, 28);
+    ctx.fillRect(screen.x + 18, bodyY + 6, 12, 28);
+    ctx.fillStyle = "#272c31";
+    ctx.fillRect(screen.x - 34, bodyY + 30, 16, 8);
+    ctx.fillRect(screen.x + 18, bodyY + 30, 16, 8);
+    ctx.fillStyle = "rgba(255, 255, 255, 0.15)";
+    ctx.fillRect(screen.x - 18, bodyY - 42, 36, 5);
+    ctx.fillStyle = "#ffb16e";
+    ctx.fillRect(screen.x - 18, bodyY - 42, 36 * clamp(npc.health / npc.maxHealth, 0, 1), 5);
   } else if (npc.type === "militarySoldier" || npc.type === "militaryGrenadier") {
     const faceX = npc.faceX || 1;
     const faceY = npc.faceY || 0;
