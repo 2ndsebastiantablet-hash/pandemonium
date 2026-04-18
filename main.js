@@ -1485,6 +1485,7 @@ function createCIAWormState() {
     timer: 0,
     actionTimer: 0,
     damageTimer: 0,
+    quakeEventTimer: 0,
     quake: 0,
     holes: [],
     trail: [],
@@ -1989,6 +1990,7 @@ function triggerCIAWormSummon(x, y, options = {}) {
   worm.trail = [];
   worm.holes = [];
   worm.quake = 0;
+  worm.quakeEventTimer = options.immediate ? 3.5 : 2.4;
   worm.chompPhase = 0;
   worm.emergeApplied = false;
   state.world.ciaBossSpawned = true;
@@ -3864,8 +3866,8 @@ function chooseCIAWormTarget() {
   const angle = Math.random() * Math.PI * 2;
   const distance = 180 + Math.random() * 420;
   return {
-    x: state.player.x + Math.cos(angle) * distance,
-    y: state.player.y + Math.sin(angle) * distance,
+    x: state.world.ciaWorm.x + Math.cos(angle) * distance,
+    y: state.world.ciaWorm.y + Math.sin(angle) * distance,
   };
 }
 
@@ -3888,6 +3890,7 @@ function updateCIAWorm(dt) {
 
   worm.chompPhase += dt * 22;
   worm.quake = Math.max(0, worm.quake - dt * 1.2);
+  worm.quakeEventTimer = Math.max(0, worm.quakeEventTimer - dt);
 
   if (worm.cutscene) {
     worm.cutsceneTimer += dt;
@@ -3922,19 +3925,17 @@ function updateCIAWorm(dt) {
     return;
   }
 
-  if (worm.visible) {
-    const focusDistance = distanceBetween(worm.x, worm.y, state.player.x, state.player.y);
-    if (focusDistance > 220) {
-      state.camera.focusX = lerp(state.player.x, worm.x, 0.45);
-      state.camera.focusY = lerp(state.player.y, worm.y, 0.45);
-    }
+  if (worm.quakeEventTimer <= 0) {
+    worm.quake = Math.max(worm.quake, 0.45 + Math.random() * 0.5);
+    worm.quakeEventTimer = 6 + Math.random() * 14;
+  }
+  if (worm.quake > 0.08) {
+    state.camera.shakeX = (Math.random() - 0.5) * worm.quake * 8;
+    state.camera.shakeY = (Math.random() - 0.5) * worm.quake * 7;
   }
 
   if (worm.mode === "underground") {
     worm.visible = false;
-    worm.quake = Math.max(worm.quake, CONFIG.ciaWormQuakeStrength);
-    state.camera.shakeX = (Math.random() - 0.5) * worm.quake * 16;
-    state.camera.shakeY = (Math.random() - 0.5) * worm.quake * 14;
     worm.timer -= dt;
     worm.damageTimer -= dt;
     const dx = worm.targetX - worm.x;
@@ -3950,16 +3951,16 @@ function updateCIAWorm(dt) {
     }
     if (distance < 40 || worm.timer <= 0) {
       const roll = Math.random();
-      if (roll < 0.45) {
+      if (roll < 0.18) {
         worm.mode = "breach";
         worm.visible = true;
         worm.timer = 1.25;
         worm.emergeApplied = false;
         worm.trail = [{ x: worm.x, y: worm.y, radius: CONFIG.ciaWormBodyRadius }];
-      } else if (roll < 0.78) {
+      } else if (roll < 0.34) {
         worm.mode = "surface";
         worm.visible = true;
-        worm.timer = 4 + Math.random() * 2.2;
+        worm.timer = 2.8 + Math.random() * 1.8;
         const target = chooseCIAWormTarget();
         const fx = target.x - worm.x;
         const fy = target.y - worm.y;
@@ -3972,16 +3973,16 @@ function updateCIAWorm(dt) {
         const target = chooseCIAWormTarget();
         worm.targetX = target.x;
         worm.targetY = target.y;
-        worm.timer = 1.2 + Math.random() * 1.6;
+        worm.timer = 3.2 + Math.random() * 6.4;
       }
     }
     return;
   }
 
   if (worm.mode === "breach") {
-    worm.quake = Math.max(worm.quake, CONFIG.ciaWormQuakeStrength * 1.1);
-    state.camera.shakeX = (Math.random() - 0.5) * worm.quake * 24;
-    state.camera.shakeY = (Math.random() - 0.5) * worm.quake * 20;
+    worm.quake = Math.max(worm.quake, CONFIG.ciaWormQuakeStrength * 0.95);
+    state.camera.shakeX = (Math.random() - 0.5) * worm.quake * 14;
+    state.camera.shakeY = (Math.random() - 0.5) * worm.quake * 12;
     worm.timer -= dt;
     const progress = 1 - worm.timer / 1.25;
     if (!worm.emergeApplied && progress >= 0.2) {
@@ -3995,15 +3996,15 @@ function updateCIAWorm(dt) {
       const target = chooseCIAWormTarget();
       worm.targetX = target.x;
       worm.targetY = target.y;
-      worm.timer = 1 + Math.random() * 1.5;
+      worm.timer = 4 + Math.random() * 8;
     }
     return;
   }
 
   if (worm.mode === "surface") {
-    worm.quake = Math.max(worm.quake, CONFIG.ciaWormQuakeStrength * 0.85);
-    state.camera.shakeX = (Math.random() - 0.5) * worm.quake * 18;
-    state.camera.shakeY = (Math.random() - 0.5) * worm.quake * 16;
+    worm.quake = Math.max(worm.quake, CONFIG.ciaWormQuakeStrength * 0.42);
+    state.camera.shakeX = (Math.random() - 0.5) * worm.quake * 10;
+    state.camera.shakeY = (Math.random() - 0.5) * worm.quake * 9;
     worm.timer -= dt;
     worm.damageTimer -= dt;
     const drift = (Math.random() - 0.5) * 0.08;
@@ -4023,14 +4024,14 @@ function updateCIAWorm(dt) {
       }
       worm.damageTimer = 0.12;
     }
-    if (worm.timer <= 0 || Math.random() < dt * 0.24) {
+    if (worm.timer <= 0 || Math.random() < dt * 0.1) {
       spawnCIAWormHole(worm, worm.x, worm.y, 72);
       worm.mode = "underground";
       worm.visible = false;
       const target = chooseCIAWormTarget();
       worm.targetX = target.x;
       worm.targetY = target.y;
-      worm.timer = 1.1 + Math.random() * 1.8;
+      worm.timer = 5 + Math.random() * 10;
     }
   }
 }
