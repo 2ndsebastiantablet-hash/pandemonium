@@ -135,6 +135,12 @@ const CONFIG = {
   ciaSlothThrowCooldown: 3.8,
   ciaSlothEatCooldown: 3.1,
   ciaSlothJumpCooldown: 6.4,
+  ciaSlothBeamCooldown: 8.8,
+  ciaSlothBeamChargeTime: 0.85,
+  ciaSlothBeamDuration: 0.95,
+  ciaSlothBeamRange: 720,
+  ciaSlothBeamDamage: 26,
+  ciaSlothBeamWidth: 28,
   ciaSlothQuakeStrength: 0.92,
   ciaSlothGrabRange: 96,
   militaryBaseCannonRange: 430,
@@ -1702,6 +1708,13 @@ function createCIASlothBossNpc(spawnPoint, rng) {
     throwCooldown: randomBetween(rng, 1.8, 3.2),
     eatCooldown: randomBetween(rng, 1.4, 2.8),
     jumpCooldown: randomBetween(rng, 2.8, 5.2),
+    beamCooldown: randomBetween(rng, 3.2, 6.1),
+    beamChargeTimer: 0,
+    beamTimer: 0,
+    beamPending: false,
+    beamSweep: rng() > 0.5 ? 1 : -1,
+    beamTargetAngle: 0,
+    beamFireTimer: 0,
     contactCooldown: 0,
     heldNpcId: null,
     altitude: 0,
@@ -3349,6 +3362,76 @@ function damageStructuresAroundCIASloth(npc, impactScale = 1) {
   }
 }
 
+function getCIASlothMouthPosition(npc) {
+  return {
+    x: npc.x + (npc.faceX || 1) * 20,
+    y: npc.y + (npc.faceY || 0) * 20 - 26,
+  };
+}
+
+function applyCIASlothBeam(npc, dt) {
+  const mouth = getCIASlothMouthPosition(npc);
+  const baseAngle = Math.atan2(npc.faceY || 0, npc.faceX || 1);
+  const sweep = Math.sin(state.time * 3.4 + npc.id * 0.13) * 0.18 * npc.beamSweep;
+  const angle = npc.beamTargetAngle + sweep;
+  const dirX = Math.cos(angle);
+  const dirY = Math.sin(angle);
+  const endX = mouth.x + dirX * CONFIG.ciaSlothBeamRange;
+  const endY = mouth.y + dirY * CONFIG.ciaSlothBeamRange;
+  npc.faceX = Math.cos(lerp(baseAngle, angle, 0.35));
+  npc.faceY = Math.sin(lerp(baseAngle, angle, 0.35));
+
+  spawnTracer(mouth.x, mouth.y, endX, endY, "rgba(255, 118, 84, 1)", CONFIG.ciaSlothBeamWidth, 0.08);
+  spawnTracer(mouth.x, mouth.y, endX, endY, "rgba(255, 210, 140, 1)", CONFIG.ciaSlothBeamWidth * 0.42, 0.08);
+
+  npc.beamFireTimer -= dt;
+  if (npc.beamFireTimer > 0) {
+    return;
+  }
+  npc.beamFireTimer = 0.08;
+
+  if (distanceToSegment(state.player.x, state.player.y, mouth.x, mouth.y, endX, endY) <= CONFIG.ciaSlothBeamWidth + state.player.radius) {
+    damagePlayer(CONFIG.ciaSlothBeamDamage, mouth.x, mouth.y, 1.6);
+  }
+
+  for (const npcTarget of state.world.npcs) {
+    if (!npcTarget.alive || npcTarget.id === npc.id || npcTarget.type === "ciaSlothBoss") {
+      continue;
+    }
+    if (distanceToSegment(npcTarget.x, npcTarget.y, mouth.x, mouth.y, endX, endY) > CONFIG.ciaSlothBeamWidth + npcTarget.radius) {
+      continue;
+    }
+    killNpcByCIASloth(npcTarget, mouth.x, mouth.y);
+  }
+
+  for (const building of getLoadedBuildings()) {
+    if (!segmentIntersectsRect(mouth.x, mouth.y, endX, endY, building)) {
+      continue;
+    }
+    applyDamageToBuilding(building, 54, endX - mouth.x, endY - mouth.y);
+    const centerX = building.x + building.w * 0.5;
+    const centerY = building.y + building.h * 0.5;
+    spawnVisualBurst(centerX, centerY, 20 + Math.random() * 24, "rgba(255, 108, 64, 0.72)");
+  }
+
+  for (const chunk of state.world.chunks.values()) {
+    for (const deco of chunk.decor) {
+      if (deco.destroyed || deco.falling) {
+        continue;
+      }
+      const hit =
+        deco.type === "tree" ? distanceToSegment(deco.x, deco.y, mouth.x, mouth.y, endX, endY) <= CONFIG.ciaSlothBeamWidth + deco.size :
+        deco.type === "lamp" ? distanceToSegment(deco.x, deco.y - (deco.height || 18) * 0.5, mouth.x, mouth.y, endX, endY) <= CONFIG.ciaSlothBeamWidth + 10 :
+        (deco.type === "policeCar" || deco.type === "civilianCar" || deco.type === "ciaCar") && segmentIntersectsRect(mouth.x, mouth.y, endX, endY, deco, 12);
+      if (!hit) {
+        continue;
+      }
+      applyDamageToDecor(deco, 46, endX - mouth.x, endY - mouth.y);
+      spawnVisualBurst(deco.x, deco.y, 16 + Math.random() * 18, "rgba(255, 132, 74, 0.7)");
+    }
+  }
+}
+
 function callPoliceBossReinforcements(npc) {
   if (npc.reinforcementCalls >= CONFIG.policeBossMaxReinforcementCalls || npc.reinforcementCooldown > 0) {
     return;
@@ -4583,6 +4666,11 @@ function updateCIASlothBoss(npc, dt) {
   npc.throwCooldown -= dt;
   npc.eatCooldown -= dt;
   npc.jumpCooldown -= dt;
+  npc.beamCooldown -= dt;
+  const previousBeamCharge = npc.beamChargeTimer;
+  const previousBeamTimer = npc.beamTimer;
+  npc.beamChargeTimer = Math.max(0, npc.beamChargeTimer - dt);
+  npc.beamTimer = Math.max(0, npc.beamTimer - dt);
   npc.contactCooldown = Math.max(0, npc.contactCooldown - dt);
   npc.armSwing += dt * 1.6;
   npc.altitude = Math.max(0, (npc.altitude || 0) - dt * 140);
@@ -4603,7 +4691,13 @@ function updateCIASlothBoss(npc, dt) {
     npc.timer = 2.6 + Math.random() * 3.4;
   }
 
-  steerEntity(npc, npc.targetX, npc.targetY, 0.05, CONFIG.ciaSlothSpeed, dt);
+  const isBeaming = npc.beamChargeTimer > 0 || npc.beamTimer > 0;
+  if (!isBeaming) {
+    steerEntity(npc, npc.targetX, npc.targetY, 0.05, CONFIG.ciaSlothSpeed, dt);
+  } else {
+    npc.vx *= 0.88;
+    npc.vy *= 0.88;
+  }
   const speed = Math.hypot(npc.vx, npc.vy);
   if (speed > 0.02) {
     npc.faceX = npc.vx / speed;
@@ -4619,8 +4713,28 @@ function updateCIASlothBoss(npc, dt) {
     npc.heldNpcId = null;
   }
 
+  if (npc.beamChargeTimer > 0 && npc.beamTimer <= 0) {
+    npc.altitude = Math.max(npc.altitude || 0, 12);
+    state.world.alert = clamp(state.world.alert + 26 * dt, 0, 100);
+  } else if (previousBeamCharge > 0 && npc.beamChargeTimer <= 0 && npc.beamPending) {
+    npc.beamPending = false;
+    npc.beamTimer = CONFIG.ciaSlothBeamDuration;
+    npc.beamFireTimer = 0;
+  } else if (npc.beamTimer > 0) {
+    applyCIASlothBeam(npc, dt);
+  } else if (previousBeamTimer > 0 && npc.beamTimer <= 0) {
+    npc.beamCooldown = CONFIG.ciaSlothBeamCooldown;
+  } else if (npc.beamCooldown <= 0) {
+    const targetX = distanceBetween(npc.x, npc.y, state.player.x, state.player.y) < 340 ? state.player.x : npc.targetX;
+    const targetY = distanceBetween(npc.x, npc.y, state.player.x, state.player.y) < 340 ? state.player.y : npc.targetY;
+    npc.beamTargetAngle = Math.atan2(targetY - npc.y, targetX - npc.x);
+    npc.beamChargeTimer = CONFIG.ciaSlothBeamChargeTime;
+    npc.beamTimer = 0;
+    npc.beamPending = true;
+  }
+
   const victim = findNearestVictimForCIASloth(npc, CONFIG.ciaSlothGrabRange);
-  if (!heldNpc && victim) {
+  if (!isBeaming && !heldNpc && victim) {
     if (npc.eatCooldown <= 0 && Math.random() > 0.45) {
       killNpcByCIASloth(victim, npc.x, npc.y);
       npc.eatCooldown = CONFIG.ciaSlothEatCooldown;
@@ -4642,12 +4756,12 @@ function updateCIASlothBoss(npc, dt) {
     npc.throwCooldown = CONFIG.ciaSlothThrowCooldown;
   }
 
-  if (npc.smashCooldown <= 0) {
+  if (!isBeaming && npc.smashCooldown <= 0) {
     damageStructuresAroundCIASloth(npc, 1 + Math.random() * 0.35);
     npc.smashCooldown = CONFIG.ciaSlothSmashCooldown;
   }
 
-  if (npc.jumpCooldown <= 0) {
+  if (!isBeaming && npc.jumpCooldown <= 0) {
     npc.altitude = 86;
     state.world.ambientQuake = Math.max(state.world.ambientQuake, CONFIG.ciaSlothQuakeStrength);
     state.camera.shakeX = (Math.random() - 0.5) * CONFIG.ciaSlothQuakeStrength * 10;
@@ -6621,12 +6735,23 @@ function drawNpc(npc) {
     ctx.arc(screen.x - 5, bodyY - 32, 2.2, 0, Math.PI * 2);
     ctx.arc(screen.x + 5, bodyY - 32, 2.2, 0, Math.PI * 2);
     ctx.fill();
-    ctx.strokeStyle = "#3f2b1b";
-    ctx.lineWidth = 4;
-    ctx.beginPath();
-    ctx.moveTo(screen.x - 6, bodyY - 20);
-    ctx.lineTo(screen.x + 6, bodyY - 18);
-    ctx.stroke();
+    if (npc.beamChargeTimer > 0 || npc.beamTimer > 0) {
+      ctx.fillStyle = "rgba(255, 138, 92, 0.9)";
+      ctx.beginPath();
+      ctx.ellipse(screen.x, bodyY - 18, 10, 8, 0, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.fillStyle = "#fff2c8";
+      ctx.beginPath();
+      ctx.ellipse(screen.x, bodyY - 18, 5, 4, 0, 0, Math.PI * 2);
+      ctx.fill();
+    } else {
+      ctx.strokeStyle = "#3f2b1b";
+      ctx.lineWidth = 4;
+      ctx.beginPath();
+      ctx.moveTo(screen.x - 6, bodyY - 20);
+      ctx.lineTo(screen.x + 6, bodyY - 18);
+      ctx.stroke();
+    }
     if (npc.heldNpcId) {
       ctx.fillStyle = "#f0d7c8";
       ctx.beginPath();
