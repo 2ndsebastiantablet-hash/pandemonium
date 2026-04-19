@@ -111,12 +111,14 @@ const CONFIG = {
   ciaBatVision: 760,
   ciaBatSpeed: 3.5,
   ciaBatNightSpeed: 4.35,
-  ciaBatLaserCooldown: 1.9,
+  ciaBatLaserCooldown: 0.22,
+  ciaBatLaserBurstCooldown: 2.1,
+  ciaBatLaserBurstShots: 5,
   ciaBatEyeCooldown: 4.8,
   ciaBatMeteorCooldown: 7.8,
   ciaBatMinionCooldown: 10.2,
   ciaBatSkeletonCooldown: 12.4,
-  ciaBatLaserDamage: 18,
+  ciaBatLaserDamage: 4.4,
   ciaBatEyeDamage: 24,
   ciaBatMeteorDamage: 26,
   ciaBatMeteorBlastRadius: 102,
@@ -1585,7 +1587,8 @@ function createCIABatBossNpc(spawnPoint, rng) {
     altitude: 120 + rng() * 18,
     health: CONFIG.ciaBatHealth,
     maxHealth: CONFIG.ciaBatHealth,
-    laserCooldown: randomBetween(rng, 0.8, 1.6),
+    laserCooldown: randomBetween(rng, 0.2, 0.8),
+    laserBurstShotsLeft: 0,
     eyeCooldown: randomBetween(rng, 1.6, 3.4),
     meteorCooldown: randomBetween(rng, 2.8, 4.5),
     minionCooldown: randomBetween(rng, 4.2, 6.4),
@@ -4213,6 +4216,7 @@ function updateCIABatBoss(npc, dt) {
   const nightBuff = dayNight.darkness >= 0.6;
   const seesPlayer = canSeePlayer(npc, CONFIG.ciaBatVision, true);
   const distance = distanceBetween(npc.x, npc.y, state.player.x, state.player.y);
+  const touchingSwarm = getNpcSwarmContact(npc);
 
   npc.laserCooldown -= dt;
   npc.eyeCooldown -= dt;
@@ -4224,8 +4228,16 @@ function updateCIABatBoss(npc, dt) {
   if (canReachFlyingEnemy(npc)) {
     if (npc.contactCooldown <= 0) {
       damageCIABatBoss(npc, 22, state.player.x, state.player.y);
-      npc.contactCooldown = 0.38;
+      npc.contactCooldown = 0.24;
     }
+    if (!npc.alive) {
+      return;
+    }
+  }
+
+  if (touchingSwarm && npc.contactCooldown <= 0) {
+    damageCIABatBoss(npc, 10 + Math.max(0, touchingSwarm - 1) * 4, state.player.x, state.player.y);
+    npc.contactCooldown = 0.18;
     if (!npc.alive) {
       return;
     }
@@ -4271,18 +4283,27 @@ function updateCIABatBoss(npc, dt) {
   npc.x += npc.vx;
   npc.y += npc.vy;
 
-  if (seesPlayer && distance <= CONFIG.ciaBatVision && npc.laserCooldown <= 0) {
+  if (seesPlayer && distance <= CONFIG.ciaBatVision && npc.laserBurstShotsLeft <= 0 && npc.laserCooldown <= 0) {
+    npc.laserBurstShotsLeft = CONFIG.ciaBatLaserBurstShots + (nightBuff ? 2 : 0);
+    npc.laserCooldown = 0;
+  }
+
+  if (seesPlayer && distance <= CONFIG.ciaBatVision && npc.laserBurstShotsLeft > 0 && npc.laserCooldown <= 0) {
     shootPlayer(npc, {
       damage: CONFIG.ciaBatLaserDamage * (nightBuff ? 1.25 : 1),
       color: "rgba(255, 86, 86, 1)",
-      width: nightBuff ? 4.8 : 3.6,
-      life: 0.18,
-      push: 0.9,
+      width: nightBuff ? 2.8 : 2.1,
+      life: 0.08,
+      push: 0.28,
       muzzleDistance: 10,
-      jitter: nightBuff ? 0.025 : 0.012,
+      jitter: nightBuff ? 0.035 : 0.02,
       ignoreLOS: true,
     });
-    npc.laserCooldown = CONFIG.ciaBatLaserCooldown * (nightBuff ? 0.72 : 1);
+    npc.laserBurstShotsLeft -= 1;
+    npc.laserCooldown =
+      npc.laserBurstShotsLeft > 0
+        ? CONFIG.ciaBatLaserCooldown * (nightBuff ? 0.75 : 1)
+        : CONFIG.ciaBatLaserBurstCooldown * (nightBuff ? 0.72 : 1);
   }
 
   if (seesPlayer && distance <= 360 && npc.eyeCooldown <= 0) {
