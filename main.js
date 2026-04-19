@@ -99,9 +99,9 @@ const CONFIG = {
   ciaShotCooldown: 0.24,
   ciaBossSpawnConsumed: 84,
   ciaBossSpawnKills: 16,
-  ciaWormUndergroundSpeed: 7.8,
-  ciaWormSurfaceSpeed: 9.4,
-  ciaWormHoleLifetime: 4.8,
+  ciaWormUndergroundSpeed: 10.8,
+  ciaWormSurfaceSpeed: 12.4,
+  ciaWormHoleLifetime: 999999,
   ciaWormBreachRadius: 220,
   ciaWormBodyRadius: 150,
   ciaWormQuakeStrength: 1.2,
@@ -1488,6 +1488,7 @@ function createCIAWormState() {
     quakeEventTimer: 0,
     quake: 0,
     holes: [],
+    dust: [],
     trail: [],
     visible: false,
     chompPhase: 0,
@@ -1988,6 +1989,7 @@ function triggerCIAWormSummon(x, y, options = {}) {
   worm.dirX = 1;
   worm.dirY = 0;
   worm.trail = [];
+  worm.dust = [];
   worm.holes = [];
   worm.quake = 0;
   worm.quakeEventTimer = options.immediate ? 3.5 : 2.4;
@@ -3862,6 +3864,21 @@ function spawnCIAWormHole(worm, x, y, radius) {
   }
 }
 
+function spawnCIAWormDust(worm, x, y) {
+  worm.dust.push({
+    x: x + (Math.random() - 0.5) * 18,
+    y: y + (Math.random() - 0.5) * 18,
+    vx: (Math.random() - 0.5) * 0.6,
+    vy: (Math.random() - 0.5) * 0.6,
+    size: 2.4 + Math.random() * 3.6,
+    life: 1.8 + Math.random() * 1.1,
+    maxLife: 1.8 + Math.random() * 1.1,
+  });
+  if (worm.dust.length > 220) {
+    worm.dust.splice(0, worm.dust.length - 220);
+  }
+}
+
 function chooseCIAWormTarget() {
   const angle = Math.random() * Math.PI * 2;
   const distance = 180 + Math.random() * 420;
@@ -3881,10 +3898,15 @@ function updateCIAWorm(dt) {
     return;
   }
 
-  for (let index = worm.holes.length - 1; index >= 0; index -= 1) {
-    worm.holes[index].life -= dt;
-    if (worm.holes[index].life <= 0) {
-      worm.holes.splice(index, 1);
+  for (let index = worm.dust.length - 1; index >= 0; index -= 1) {
+    const dust = worm.dust[index];
+    dust.life -= dt;
+    dust.x += dust.vx;
+    dust.y += dust.vy;
+    dust.vx *= 0.96;
+    dust.vy *= 0.96;
+    if (dust.life <= 0) {
+      worm.dust.splice(index, 1);
     }
   }
 
@@ -3946,8 +3968,10 @@ function updateCIAWorm(dt) {
     worm.x += worm.dirX * CONFIG.ciaWormUndergroundSpeed;
     worm.y += worm.dirY * CONFIG.ciaWormUndergroundSpeed;
     if (worm.damageTimer <= 0) {
-      spawnCIAWormHole(worm, worm.x, worm.y, 44 + Math.random() * 24);
-      worm.damageTimer = 0.24;
+      for (let index = 0; index < 5; index += 1) {
+        spawnCIAWormDust(worm, worm.x, worm.y);
+      }
+      worm.damageTimer = 0.12;
     }
     if (distance < 40 || worm.timer <= 0) {
       const roll = Math.random();
@@ -4014,8 +4038,8 @@ function updateCIAWorm(dt) {
     worm.x += worm.dirX * CONFIG.ciaWormSurfaceSpeed;
     worm.y += worm.dirY * CONFIG.ciaWormSurfaceSpeed;
     worm.trail.unshift({ x: worm.x, y: worm.y, radius: CONFIG.ciaWormBodyRadius });
-    if (worm.trail.length > 18) {
-      worm.trail.length = 18;
+    if (worm.trail.length > 34) {
+      worm.trail.length = 34;
     }
     if (worm.damageTimer <= 0) {
       for (let index = 0; index < Math.min(7, worm.trail.length); index += 1) {
@@ -5240,16 +5264,30 @@ function drawCIAWormHoles() {
   }
   for (const hole of worm.holes) {
     const screen = worldToScreen(hole.x, hole.y);
-    const fade = clamp(hole.life / hole.maxLife, 0, 1);
-    ctx.fillStyle = `rgba(34, 16, 12, ${(0.12 + fade * 0.2).toFixed(3)})`;
+    ctx.fillStyle = "rgba(34, 16, 12, 0.3)";
     ctx.beginPath();
     ctx.ellipse(screen.x, screen.y, hole.radius, hole.radius * 0.72, 0, 0, Math.PI * 2);
     ctx.fill();
-    ctx.strokeStyle = `rgba(116, 70, 58, ${(0.12 + fade * 0.18).toFixed(3)})`;
+    ctx.strokeStyle = "rgba(116, 70, 58, 0.24)";
     ctx.lineWidth = Math.max(3, hole.radius * 0.04);
     ctx.beginPath();
     ctx.ellipse(screen.x, screen.y, hole.radius * 0.92, hole.radius * 0.62, 0, 0, Math.PI * 2);
     ctx.stroke();
+  }
+}
+
+function drawCIAWormDust() {
+  const worm = state.world.ciaWorm;
+  if (!worm) {
+    return;
+  }
+  for (const dust of worm.dust) {
+    const screen = worldToScreen(dust.x, dust.y);
+    const fade = clamp(dust.life / dust.maxLife, 0, 1);
+    ctx.fillStyle = `rgba(98, 74, 62, ${(fade * 0.35).toFixed(3)})`;
+    ctx.beginPath();
+    ctx.arc(screen.x, screen.y, dust.size, 0, Math.PI * 2);
+    ctx.fill();
   }
 }
 
@@ -5913,6 +5951,7 @@ function render() {
   drawDebris();
   drawBlood();
   drawCIAWormHoles();
+  drawCIAWormDust();
   drawTraps();
   drawExplosions();
   drawProjectiles();
