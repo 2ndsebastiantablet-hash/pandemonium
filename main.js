@@ -1177,19 +1177,20 @@ function createLot(chunk, rect, type, rng) {
 }
 
 function getWorldZone(cx, cy) {
+  if (Math.max(Math.abs(cx), Math.abs(cy)) >= 12) {
+    return "desert";
+  }
   if (Math.abs(cx) <= 2 && Math.abs(cy) <= 2) {
     return "neighborhood";
   }
-  if ((cx >= 3 && cx <= 7 && Math.abs(cy) <= 4) || (cx === 5 && Math.abs(cy) <= 7)) {
-    return "highway";
-  }
-  if (cx >= 8 && cx <= 13 && Math.abs(cy) <= 5) {
+  if (cx >= 4 && cx <= 7 && Math.abs(cy) <= 2) {
     return "city";
   }
-  if (cx >= 14 && cx <= 19 && Math.abs(cy) <= 5) {
-    return "desert";
-  }
   return "country";
+}
+
+function getCountryBiome(cx, cy) {
+  return cx >= 8 && Math.abs(cy) <= 3 ? "farm" : "forest";
 }
 
 function getCurrentWorldZone() {
@@ -1272,33 +1273,6 @@ function createNeighborhoodChunk(chunk, rng) {
   addZoneRoadTargets(chunk, rng, 10);
 }
 
-function createHighwayChunk(chunk, rng) {
-  const { originX, originY, cx } = chunk;
-  const laneWidth = 58;
-  const centerY = originY + CONFIG.chunkSize * 0.5;
-  chunk.roads.push(
-    { x: originX, y: centerY - laneWidth * 1.6, w: CONFIG.chunkSize, h: laneWidth, type: "horizontal" },
-    { x: originX, y: centerY + laneWidth * 0.6, w: CONFIG.chunkSize, h: laneWidth, type: "horizontal" },
-  );
-  if (cx === 5 || rng() > 0.55) {
-    const centerX = originX + CONFIG.chunkSize * 0.5 - laneWidth * 0.5;
-    chunk.roads.push(
-      { x: centerX - laneWidth * 0.8, y: originY, w: laneWidth, h: CONFIG.chunkSize, type: "vertical" },
-      { x: centerX + laneWidth * 0.8, y: originY, w: laneWidth, h: CONFIG.chunkSize, type: "vertical" },
-    );
-  }
-  addDeco(chunk, { type: "serviceStop", x: originX + 90, y: originY + 88, w: 130, h: 76 });
-  addDeco(chunk, { type: "serviceStop", x: originX + CONFIG.chunkSize - 220, y: originY + CONFIG.chunkSize - 156, w: 130, h: 76 });
-  for (let index = 0; index < 10; index += 1) {
-    const road = chunk.roads[index % chunk.roads.length];
-    const point = sampleRectPerimeter(road, rng());
-    addWalkTarget(chunk, point.x, point.y);
-    if (index < 6) {
-      addDeco(chunk, { type: "lamp", x: point.x + randomBetween(rng, -8, 8), y: point.y + randomBetween(rng, -8, 8) });
-    }
-  }
-}
-
 function createCityChunk(chunk, rng) {
   const { originX, originY } = chunk;
   const centerRoadX = originX + CONFIG.chunkSize * 0.5 - CONFIG.roadWidth * 0.5;
@@ -1364,6 +1338,8 @@ function createDesertChunk(chunk, rng) {
 
 function createCountryChunk(chunk, rng) {
   const { originX, originY } = chunk;
+  const biome = getCountryBiome(chunk.cx, chunk.cy);
+  chunk.biome = biome;
   if (rng() > 0.45) {
     chunk.roads.push(
       { x: originX, y: originY + CONFIG.chunkSize * 0.5 - CONFIG.sidewalkWidth, w: CONFIG.chunkSize, h: CONFIG.sidewalkWidth * 2, type: "horizontal" },
@@ -1379,13 +1355,14 @@ function createCountryChunk(chunk, rng) {
   if (hasRiver) {
     addDeco(chunk, { type: "river", x: originX + 40, y: originY + randomBetween(rng, 140, 280), w: CONFIG.chunkSize - 80, h: randomBetween(rng, 70, 110) });
   }
-  if (rng() > 0.38) {
+  if (biome === "farm" && rng() > 0.22) {
     addBuilding(chunk, originX + 110, originY + 110, 130, 92, "farmhouse", "#d8c2a0");
     addBuilding(chunk, originX + 300, originY + 150, 170, 110, "barn", "#a04e42");
     addWalkTarget(chunk, originX + 175, originY + 220);
     addWalkTarget(chunk, originX + 385, originY + 280);
   }
-  for (let index = 0; index < 18; index += 1) {
+  const treeCount = biome === "farm" ? 10 : 24;
+  for (let index = 0; index < treeCount; index += 1) {
     addDeco(chunk, {
       type: "tree",
       x: randomBetween(rng, originX + 30, originX + CONFIG.chunkSize - 30),
@@ -1407,6 +1384,7 @@ function generateChunk(cx, cy) {
     cx,
     cy,
     zone,
+    biome: zone === "country" ? getCountryBiome(cx, cy) : zone,
     originX,
     originY,
     roads: [],
@@ -1421,8 +1399,6 @@ function generateChunk(cx, cy) {
 
   if (zone === "neighborhood") {
     createNeighborhoodChunk(chunk, rng);
-  } else if (zone === "highway") {
-    createHighwayChunk(chunk, rng);
   } else if (zone === "city") {
     createCityChunk(chunk, rng);
   } else if (zone === "desert") {
@@ -1431,7 +1407,11 @@ function generateChunk(cx, cy) {
     createCountryChunk(chunk, rng);
   }
 
-  const parkedCivilianCars = zone === "highway" ? randomInt(rng, 0, 1) : zone === "city" ? randomInt(rng, 2, 5) : zone === "neighborhood" ? randomInt(rng, 2, 4) : zone === "country" ? randomInt(rng, 1, 2) : 0;
+  const parkedCivilianCars =
+    zone === "city" ? randomInt(rng, 2, 5) :
+    zone === "neighborhood" ? randomInt(rng, 2, 4) :
+    zone === "country" ? (chunk.biome === "farm" ? randomInt(rng, 1, 2) : randomInt(rng, 0, 1)) :
+    0;
   const civilianCarColors = ["#6f8fae", "#8f4545", "#69845c", "#c18d42", "#72727e"];
   for (let index = 0; index < parkedCivilianCars; index += 1) {
     if (!chunk.roads.length) {
@@ -1578,7 +1558,6 @@ function spawnCivilian(chunk, rng, options = {}) {
     alive: true,
     tint: (options.palette || ["#2e3b42", "#5a4738", "#46615a", "#544f69"])[randomInt(rng, 0, (options.palette || ["#2e3b42", "#5a4738", "#46615a", "#544f69"]).length - 1)],
     style: options.style || "casual",
-    petKind: options.petKind || null,
   });
   state.world.nextNpcId += 1;
 }
@@ -1655,19 +1634,7 @@ function spawnChunkPopulation(chunk) {
     for (let index = 0; index < population; index += 1) {
       spawnCivilian(chunk, rng, {
         inCar: rng() > 0.74,
-        petKind: rng() > 0.82 ? "dog" : null,
         palette: ["#405769", "#5b4e44", "#58746b", "#6a5b7d"],
-      });
-    }
-    for (let index = 0; index < randomInt(rng, 2, 4); index += 1) {
-      spawnBird(chunk, rng);
-    }
-  } else if (zone === "highway") {
-    const drivers = randomInt(rng, 4, 7);
-    for (let index = 0; index < drivers; index += 1) {
-      spawnCivilian(chunk, rng, {
-        inCar: true,
-        palette: ["#5f6b77", "#6e665e", "#53625c"],
       });
     }
   } else if (zone === "city") {
@@ -1691,18 +1658,20 @@ function spawnChunkPopulation(chunk) {
       });
     }
   } else {
-    const people = randomInt(rng, 2, 5);
+    const biome = chunk.biome || getCountryBiome(chunk.cx, chunk.cy);
+    const people = biome === "farm" ? randomInt(rng, 2, 5) : randomInt(rng, 0, 2);
     for (let index = 0; index < people; index += 1) {
       spawnCivilian(chunk, rng, {
-        inCar: rng() > 0.88,
+        inCar: biome === "farm" ? rng() > 0.82 : rng() > 0.94,
         palette: ["#546d46", "#7d684f", "#45616b", "#6f5f54"],
       });
     }
-    for (let index = 0; index < randomInt(rng, 3, 5); index += 1) {
+    const birdCount = biome === "farm" ? randomInt(rng, 2, 4) : randomInt(rng, 1, 3);
+    for (let index = 0; index < birdCount; index += 1) {
       spawnBird(chunk, rng);
     }
     const wildSpecies = ["wolf", "bear", "fox", "owl", "frog", "beaver", "porcupine", "moose", "deer"];
-    const animalCount = randomInt(rng, 4, 7);
+    const animalCount = biome === "farm" ? randomInt(rng, 2, 4) : randomInt(rng, 5, 8);
     for (let index = 0; index < animalCount; index += 1) {
       spawnAnimal(chunk, rng, wildSpecies[randomInt(rng, 0, wildSpecies.length - 1)]);
     }
@@ -5699,12 +5668,13 @@ function drawTown() {
   for (const chunk of getLoadedChunks()) {
     const screen = worldToScreen(chunk.originX, chunk.originY);
     const zone = chunk.zone || "neighborhood";
+    const biome = chunk.biome || zone;
     const zoneFill =
       zone === "neighborhood" ? `rgba(${Math.round(128 + dayNight.daylight * 92)}, ${Math.round(155 + dayNight.daylight * 88)}, ${Math.round(114 + dayNight.daylight * 86)}, 1)` :
-      zone === "highway" ? `rgba(${Math.round(116 + dayNight.daylight * 38)}, ${Math.round(118 + dayNight.daylight * 40)}, ${Math.round(112 + dayNight.daylight * 36)}, 1)` :
       zone === "city" ? `rgba(${Math.round(106 + dayNight.daylight * 54)}, ${Math.round(110 + dayNight.daylight * 56)}, ${Math.round(112 + dayNight.daylight * 58)}, 1)` :
       zone === "desert" ? `rgba(${Math.round(168 + dayNight.daylight * 70)}, ${Math.round(142 + dayNight.daylight * 62)}, ${Math.round(88 + dayNight.daylight * 42)}, 1)` :
-      `rgba(${Math.round(118 + dayNight.daylight * 102)}, ${Math.round(146 + dayNight.daylight * 92)}, ${Math.round(104 + dayNight.daylight * 78)}, 1)`;
+      biome === "farm" ? `rgba(${Math.round(144 + dayNight.daylight * 88)}, ${Math.round(166 + dayNight.daylight * 82)}, ${Math.round(98 + dayNight.daylight * 64)}, 1)` :
+      `rgba(${Math.round(96 + dayNight.daylight * 78)}, ${Math.round(128 + dayNight.daylight * 86)}, ${Math.round(88 + dayNight.daylight * 74)}, 1)`;
     ctx.fillStyle = zoneFill;
     ctx.fillRect(screen.x, screen.y, CONFIG.chunkSize, CONFIG.chunkSize);
     for (const road of chunk.roads) {
@@ -5962,20 +5932,6 @@ function drawNpc(npc) {
       ctx.fillRect(screen.x - 1, screen.y - 1, 2, 9);
       ctx.fillStyle = "#aa2a2a";
       ctx.fillRect(screen.x - 1, screen.y + 4, 2, 5);
-    }
-    if (npc.petKind === "dog") {
-      ctx.fillStyle = "#7a634d";
-      ctx.beginPath();
-      ctx.ellipse(screen.x - 12, screen.y + 7, 6, 4, 0, 0, Math.PI * 2);
-      ctx.fill();
-      ctx.fillRect(screen.x - 15, screen.y + 4, 3, 5);
-      ctx.fillRect(screen.x - 8, screen.y + 4, 3, 5);
-      ctx.strokeStyle = "#574638";
-      ctx.lineWidth = 1.4;
-      ctx.beginPath();
-      ctx.moveTo(screen.x - 6, screen.y + 2);
-      ctx.lineTo(screen.x - 1, screen.y - 1);
-      ctx.stroke();
     }
   } else if (npc.type === "animal") {
     ctx.fillStyle = npc.tint;
