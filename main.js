@@ -932,24 +932,16 @@ function dragNpcIntoSwarm(npc, contact, dt) {
 // SECTION: world generation
 function addBuilding(chunk, x, y, w, h, kind, tint) {
   const baseIntegrity =
-    kind === "skyscraper" ? 168 :
-    kind === "officeTower" ? 148 :
     kind === "ciaBase" ? 165 :
     kind === "militaryBase" ? 155 :
     kind === "policeStation" ? 140 :
-    kind === "barn" ? 92 :
-    kind === "farmhouse" ? 88 :
     kind === "apartments" ? 120 :
     kind === "marketHall" ? 100 :
     84;
   const threshold =
-    kind === "skyscraper" ? 13.2 :
-    kind === "officeTower" ? 11.8 :
     kind === "ciaBase" ? 12.8 :
     kind === "militaryBase" ? 12.1 :
     kind === "policeStation" ? 11.5 :
-    kind === "barn" ? 8.6 :
-    kind === "farmhouse" ? 8.2 :
     kind === "apartments" ? 10.2 :
     kind === "marketHall" ? 9.5 :
     8.4;
@@ -1023,18 +1015,6 @@ function addDeco(chunk, deco) {
     value.impactThreshold = 2.3;
     value.chipColor = "#17181d";
     value.occupied = false;
-  } else if (deco.type === "cactus") {
-    value.destructible = true;
-    value.integrity = 30;
-    value.maxIntegrity = 30;
-    value.impactThreshold = 3.5;
-    value.chipColor = "#5d8a53";
-  } else if (deco.type === "tumbleweed") {
-    value.destructible = false;
-  } else if (deco.type === "flower") {
-    value.destructible = false;
-  } else if (deco.type === "river" || deco.type === "serviceStop") {
-    value.destructible = false;
   }
   chunk.decor.push(value);
 }
@@ -1176,46 +1156,12 @@ function createLot(chunk, rect, type, rng) {
   addWalkTarget(chunk, rect.x + rect.w * 0.5, rect.y + 18);
 }
 
-function getWorldZone(cx, cy) {
-  if (Math.abs(cx) <= 2 && Math.abs(cy) <= 2) {
-    return "neighborhood";
-  }
-  if ((cx >= 3 && cx <= 7 && Math.abs(cy) <= 4) || (cx === 5 && Math.abs(cy) <= 7)) {
-    return "highway";
-  }
-  if (cx >= 8 && cx <= 13 && Math.abs(cy) <= 5) {
-    return "city";
-  }
-  if (cx >= 14 && cx <= 19 && Math.abs(cy) <= 5) {
-    return "desert";
-  }
-  return "country";
-}
-
-function getCurrentWorldZone() {
-  const { cx, cy } = getChunkCoords(state.player.x, state.player.y);
-  return getWorldZone(cx, cy);
-}
-
-function isEnemySpreadUnlocked(enemy) {
+function getEnemyStructureSpawnChances() {
   const size = state.player.absorbedHumans;
-  if (enemy === "police") return size >= 18;
-  if (enemy === "military") return size >= 30;
-  if (enemy === "cia") return size >= 42;
-  if (enemy === "alien") return size >= 54;
-  return false;
-}
-
-function getEnemyStructureSpawnChances(zone) {
-  const spread = {
-    police: isEnemySpreadUnlocked("police") ? 0.04 : 0,
-    military: isEnemySpreadUnlocked("military") ? 0.04 : 0,
-    cia: isEnemySpreadUnlocked("cia") ? 0.04 : 0,
-  };
   return {
-    police: (zone === "neighborhood" ? 0.08 : 0) + spread.police,
-    military: (zone === "desert" ? 0.22 : 0) + spread.military,
-    cia: (zone === "city" ? 0.18 : 0) + spread.cia,
+    police: clamp(0.08 + size * 0.008, 0.08, 0.32),
+    military: clamp(Math.max(0, (size - 4) * 0.007), 0, 0.24),
+    cia: clamp(Math.max(0, (size - 12) * 0.0055), 0, 0.18),
   };
 }
 
@@ -1230,183 +1176,15 @@ function pickEnemyLotIndex(cx, cy, rng, saltX, saltY, chance) {
   return randomInt(rng, 0, 3);
 }
 
-function addZoneRoadTargets(chunk, rng, count = 8) {
-  for (let index = 0; index < count; index += 1) {
-    const road = chunk.roads[index % Math.max(1, Math.min(2, chunk.roads.length))];
-    const point = sampleRectPerimeter(road, rng());
-    addWalkTarget(chunk, point.x, point.y);
-  }
-}
-
-function createNeighborhoodChunk(chunk, rng) {
-  const { originX, originY } = chunk;
-  const centerRoadX = originX + CONFIG.chunkSize * 0.5 - CONFIG.roadWidth * 0.5;
-  const centerRoadY = originY + CONFIG.chunkSize * 0.5 - CONFIG.roadWidth * 0.5;
-  chunk.roads.push(
-    { x: originX, y: centerRoadY, w: CONFIG.chunkSize, h: CONFIG.roadWidth, type: "horizontal" },
-    { x: centerRoadX, y: originY, w: CONFIG.roadWidth, h: CONFIG.chunkSize, type: "vertical" },
-  );
-  const lots = [
-    { x: originX + 30, y: originY + 30, w: 360, h: 360 },
-    { x: originX + 570, y: originY + 30, w: 360, h: 360 },
-    { x: originX + 30, y: originY + 570, w: 360, h: 360 },
-    { x: originX + 570, y: originY + 570, w: 360, h: 360 },
-  ];
-  const lotTypes = ["homes", "homes", "park", "homes"];
-  if ((hash2d(chunk.cx * 5 + 11, chunk.cy * 7 - 13) % 1000) / 1000 < 0.08) {
-    lotTypes[randomInt(rng, 0, 3)] = "policeStation";
-  } else if ((hash2d(chunk.cx * 9 + 17, chunk.cy * 3 + 5) % 1000) / 1000 < 0.18) {
-    lotTypes[randomInt(rng, 0, 3)] = "market";
-  }
-  for (let index = 0; index < lots.length; index += 1) {
-    createLot(chunk, lots[index], lotTypes[index], rng);
-  }
-  for (let index = 0; index < 18; index += 1) {
-    addDeco(chunk, {
-      type: "tree",
-      x: randomBetween(rng, originX + 40, originX + CONFIG.chunkSize - 40),
-      y: randomBetween(rng, originY + 40, originY + CONFIG.chunkSize - 40),
-      size: randomBetween(rng, 12, 22),
-    });
-  }
-  addZoneRoadTargets(chunk, rng, 10);
-}
-
-function createHighwayChunk(chunk, rng) {
-  const { originX, originY, cx } = chunk;
-  const laneWidth = 58;
-  const centerY = originY + CONFIG.chunkSize * 0.5;
-  chunk.roads.push(
-    { x: originX, y: centerY - laneWidth * 1.6, w: CONFIG.chunkSize, h: laneWidth, type: "horizontal" },
-    { x: originX, y: centerY + laneWidth * 0.6, w: CONFIG.chunkSize, h: laneWidth, type: "horizontal" },
-  );
-  if (cx === 5 || rng() > 0.55) {
-    const centerX = originX + CONFIG.chunkSize * 0.5 - laneWidth * 0.5;
-    chunk.roads.push(
-      { x: centerX - laneWidth * 0.8, y: originY, w: laneWidth, h: CONFIG.chunkSize, type: "vertical" },
-      { x: centerX + laneWidth * 0.8, y: originY, w: laneWidth, h: CONFIG.chunkSize, type: "vertical" },
-    );
-  }
-  addDeco(chunk, { type: "serviceStop", x: originX + 90, y: originY + 88, w: 130, h: 76 });
-  addDeco(chunk, { type: "serviceStop", x: originX + CONFIG.chunkSize - 220, y: originY + CONFIG.chunkSize - 156, w: 130, h: 76 });
-  for (let index = 0; index < 10; index += 1) {
-    const road = chunk.roads[index % chunk.roads.length];
-    const point = sampleRectPerimeter(road, rng());
-    addWalkTarget(chunk, point.x, point.y);
-    if (index < 6) {
-      addDeco(chunk, { type: "lamp", x: point.x + randomBetween(rng, -8, 8), y: point.y + randomBetween(rng, -8, 8) });
-    }
-  }
-}
-
-function createCityChunk(chunk, rng) {
-  const { originX, originY } = chunk;
-  const centerRoadX = originX + CONFIG.chunkSize * 0.5 - CONFIG.roadWidth * 0.5;
-  const centerRoadY = originY + CONFIG.chunkSize * 0.5 - CONFIG.roadWidth * 0.5;
-  chunk.roads.push(
-    { x: originX, y: centerRoadY, w: CONFIG.chunkSize, h: CONFIG.roadWidth, type: "horizontal" },
-    { x: centerRoadX, y: originY, w: CONFIG.roadWidth, h: CONFIG.chunkSize, type: "vertical" },
-    { x: originX + CONFIG.chunkSize * 0.24, y: originY, w: CONFIG.sidewalkWidth * 2, h: CONFIG.chunkSize, type: "vertical" },
-    { x: originX, y: originY + CONFIG.chunkSize * 0.24, w: CONFIG.chunkSize, h: CONFIG.sidewalkWidth * 2, type: "horizontal" },
-  );
-  const lots = [
-    { x: originX + 24, y: originY + 24, w: 330, h: 330 },
-    { x: originX + 606, y: originY + 24, w: 330, h: 330 },
-    { x: originX + 24, y: originY + 606, w: 330, h: 330 },
-    { x: originX + 606, y: originY + 606, w: 330, h: 330 },
-  ];
-  const cityLotTypes = ["officeTower", "skyscraper", "apartments", "officeTower"];
-  if ((hash2d(chunk.cx * 17 + 3, chunk.cy * 19 + 7) % 1000) / 1000 < 0.18) {
-    cityLotTypes[randomInt(rng, 0, 3)] = "ciaBase";
-  }
-  for (let index = 0; index < lots.length; index += 1) {
-    const lot = lots[index];
-    const type = cityLotTypes[index];
-    if (type === "ciaBase") {
-      createLot(chunk, lot, "ciaBase", rng);
-    } else if (type === "skyscraper") {
-      addBuilding(chunk, lot.x + 34, lot.y + 20, lot.w - 68, lot.h - 40, "skyscraper", "#7c8794");
-      addWalkTarget(chunk, lot.x + lot.w * 0.5, lot.y + lot.h - 18);
-    } else if (type === "officeTower") {
-      addBuilding(chunk, lot.x + 28, lot.y + 34, lot.w - 56, lot.h - 68, "officeTower", "#68717d");
-      addWalkTarget(chunk, lot.x + lot.w * 0.5, lot.y + lot.h - 18);
-    } else {
-      createLot(chunk, lot, "apartments", rng);
-    }
-  }
-  for (let index = 0; index < 8; index += 1) {
-    const road = chunk.roads[index % 2];
-    const point = sampleRectPerimeter(road, rng());
-    addWalkTarget(chunk, point.x, point.y);
-    addDeco(chunk, { type: "lamp", x: point.x, y: point.y });
-  }
-}
-
-function createDesertChunk(chunk, rng) {
-  const { originX, originY } = chunk;
-  const centerRoadY = originY + CONFIG.chunkSize * 0.5 - CONFIG.roadWidth * 0.5;
-  chunk.roads.push(
-    { x: originX, y: centerRoadY, w: CONFIG.chunkSize, h: CONFIG.roadWidth, type: "horizontal" },
-    { x: originX + CONFIG.chunkSize * 0.7, y: originY, w: CONFIG.sidewalkWidth * 2, h: CONFIG.chunkSize, type: "vertical" },
-  );
-  if ((hash2d(chunk.cx * 13 + 5, chunk.cy * 23 + 9) % 1000) / 1000 < 0.34) {
-    createLot(chunk, { x: originX + 140, y: originY + 180, w: 420, h: 360 }, "militaryBase", rng);
-  }
-  for (let index = 0; index < 12; index += 1) {
-    addDeco(chunk, { type: "cactus", x: randomBetween(rng, originX + 40, originX + CONFIG.chunkSize - 40), y: randomBetween(rng, originY + 40, originY + CONFIG.chunkSize - 40), size: randomBetween(rng, 12, 24) });
-  }
-  for (let index = 0; index < 6; index += 1) {
-    addDeco(chunk, { type: "tumbleweed", x: randomBetween(rng, originX + 30, originX + CONFIG.chunkSize - 30), y: randomBetween(rng, originY + 30, originY + CONFIG.chunkSize - 30), size: randomBetween(rng, 8, 16) });
-    addDeco(chunk, { type: "flower", x: randomBetween(rng, originX + 30, originX + CONFIG.chunkSize - 30), y: randomBetween(rng, originY + 30, originY + CONFIG.chunkSize - 30), color: "#8b63c5" });
-  }
-  addZoneRoadTargets(chunk, rng, 6);
-}
-
-function createCountryChunk(chunk, rng) {
-  const { originX, originY } = chunk;
-  if (rng() > 0.45) {
-    chunk.roads.push(
-      { x: originX, y: originY + CONFIG.chunkSize * 0.5 - CONFIG.sidewalkWidth, w: CONFIG.chunkSize, h: CONFIG.sidewalkWidth * 2, type: "horizontal" },
-      { x: originX + CONFIG.chunkSize * 0.5 - CONFIG.sidewalkWidth, y: originY, w: CONFIG.sidewalkWidth * 2, h: CONFIG.chunkSize, type: "vertical" },
-    );
-  } else {
-    chunk.roads.push(
-      { x: originX + 90, y: originY + CONFIG.chunkSize * 0.52, w: CONFIG.chunkSize - 180, h: CONFIG.sidewalkWidth * 2, type: "horizontal" },
-      { x: originX + CONFIG.chunkSize * 0.48, y: originY + 90, w: CONFIG.sidewalkWidth * 2, h: CONFIG.chunkSize - 180, type: "vertical" },
-    );
-  }
-  const hasRiver = rng() > 0.58;
-  if (hasRiver) {
-    addDeco(chunk, { type: "river", x: originX + 40, y: originY + randomBetween(rng, 140, 280), w: CONFIG.chunkSize - 80, h: randomBetween(rng, 70, 110) });
-  }
-  if (rng() > 0.38) {
-    addBuilding(chunk, originX + 110, originY + 110, 130, 92, "farmhouse", "#d8c2a0");
-    addBuilding(chunk, originX + 300, originY + 150, 170, 110, "barn", "#a04e42");
-    addWalkTarget(chunk, originX + 175, originY + 220);
-    addWalkTarget(chunk, originX + 385, originY + 280);
-  }
-  for (let index = 0; index < 18; index += 1) {
-    addDeco(chunk, {
-      type: "tree",
-      x: randomBetween(rng, originX + 30, originX + CONFIG.chunkSize - 30),
-      y: randomBetween(rng, originY + 30, originY + CONFIG.chunkSize - 30),
-      size: randomBetween(rng, 12, 24),
-    });
-  }
-  addZoneRoadTargets(chunk, rng, 8);
-}
-
 function generateChunk(cx, cy) {
   const key = chunkKey(cx, cy);
   const originX = cx * CONFIG.chunkSize;
   const originY = cy * CONFIG.chunkSize;
   const rng = mulberry32(hash2d(cx, cy));
-  const zone = getWorldZone(cx, cy);
   const chunk = {
     key,
     cx,
     cy,
-    zone,
     originX,
     originY,
     roads: [],
@@ -1416,27 +1194,63 @@ function generateChunk(cx, cy) {
     policeSpawns: [],
     militarySpawns: [],
     ciaSpawns: [],
-    populated: false,
   };
 
-  if (zone === "neighborhood") {
-    createNeighborhoodChunk(chunk, rng);
-  } else if (zone === "highway") {
-    createHighwayChunk(chunk, rng);
-  } else if (zone === "city") {
-    createCityChunk(chunk, rng);
-  } else if (zone === "desert") {
-    createDesertChunk(chunk, rng);
-  } else {
-    createCountryChunk(chunk, rng);
+  const centerRoadX = originX + CONFIG.chunkSize * 0.5 - CONFIG.roadWidth * 0.5;
+  const centerRoadY = originY + CONFIG.chunkSize * 0.5 - CONFIG.roadWidth * 0.5;
+  chunk.roads.push(
+    { x: originX, y: centerRoadY, w: CONFIG.chunkSize, h: CONFIG.roadWidth, type: "horizontal" },
+    { x: centerRoadX, y: originY, w: CONFIG.roadWidth, h: CONFIG.chunkSize, type: "vertical" },
+  );
+
+  const quarterRoadX = originX + CONFIG.chunkSize * 0.24;
+  const quarterRoadY = originY + CONFIG.chunkSize * 0.24;
+  chunk.roads.push(
+    { x: quarterRoadX, y: originY, w: CONFIG.sidewalkWidth * 1.4, h: CONFIG.chunkSize, type: "lane" },
+    { x: originX, y: quarterRoadY, w: CONFIG.chunkSize, h: CONFIG.sidewalkWidth * 1.4, type: "lane" },
+  );
+
+  const quadrants = [
+    { x: originX + 28, y: originY + 28, w: CONFIG.chunkSize * 0.5 - CONFIG.roadWidth * 0.5 - 56, h: CONFIG.chunkSize * 0.5 - CONFIG.roadWidth * 0.5 - 56 },
+    { x: originX + CONFIG.chunkSize * 0.5 + CONFIG.roadWidth * 0.5 + 28, y: originY + 28, w: CONFIG.chunkSize * 0.5 - CONFIG.roadWidth * 0.5 - 56, h: CONFIG.chunkSize * 0.5 - CONFIG.roadWidth * 0.5 - 56 },
+    { x: originX + 28, y: originY + CONFIG.chunkSize * 0.5 + CONFIG.roadWidth * 0.5 + 28, w: CONFIG.chunkSize * 0.5 - CONFIG.roadWidth * 0.5 - 56, h: CONFIG.chunkSize * 0.5 - CONFIG.roadWidth * 0.5 - 56 },
+    { x: originX + CONFIG.chunkSize * 0.5 + CONFIG.roadWidth * 0.5 + 28, y: originY + CONFIG.chunkSize * 0.5 + CONFIG.roadWidth * 0.5 + 28, w: CONFIG.chunkSize * 0.5 - CONFIG.roadWidth * 0.5 - 56, h: CONFIG.chunkSize * 0.5 - CONFIG.roadWidth * 0.5 - 56 },
+  ];
+
+  const lotTypes = ["homes", "market", "apartments", "park"];
+  const structureChances = getEnemyStructureSpawnChances();
+  const policeIndex = pickEnemyLotIndex(cx, cy, rng, 11, 13, structureChances.police);
+  let militaryIndex = pickEnemyLotIndex(cx, cy, rng, 19, 17, structureChances.military);
+  let ciaIndex = pickEnemyLotIndex(cx, cy, rng, 23, 29, structureChances.cia);
+  if (militaryIndex === policeIndex) {
+    militaryIndex = -1;
+  }
+  if (ciaIndex === policeIndex || ciaIndex === militaryIndex) {
+    ciaIndex = -1;
+  }
+  for (let index = 0; index < quadrants.length; index += 1) {
+    const rect = quadrants[index];
+    let lotType = lotTypes[randomInt(rng, 0, lotTypes.length - 1)];
+    if (index === policeIndex) {
+      lotType = "policeStation";
+    } else if (index === militaryIndex && index !== policeIndex) {
+      lotType = "militaryBase";
+    } else if (index === ciaIndex && index !== policeIndex && index !== militaryIndex) {
+      lotType = "ciaBase";
+    }
+    createLot(chunk, rect, lotType, rng);
   }
 
-  const parkedCivilianCars = zone === "highway" ? randomInt(rng, 0, 1) : zone === "city" ? randomInt(rng, 2, 5) : zone === "neighborhood" ? randomInt(rng, 2, 4) : zone === "country" ? randomInt(rng, 1, 2) : 0;
+  for (let index = 0; index < 8; index += 1) {
+    const road = chunk.roads[index % 2];
+    const point = sampleRectPerimeter(road, rng());
+    addWalkTarget(chunk, point.x, point.y);
+    addDeco(chunk, { type: "lamp", x: point.x + randomBetween(rng, -12, 12), y: point.y + randomBetween(rng, -12, 12) });
+  }
+
+  const parkedCivilianCars = randomInt(rng, 1, 3);
   const civilianCarColors = ["#6f8fae", "#8f4545", "#69845c", "#c18d42", "#72727e"];
   for (let index = 0; index < parkedCivilianCars; index += 1) {
-    if (!chunk.roads.length) {
-      break;
-    }
     const road = chunk.roads[index % chunk.roads.length];
     const point = sampleRectPerimeter(road, rng());
     addDeco(chunk, {
@@ -1448,6 +1262,7 @@ function generateChunk(cx, cy) {
       parked: true,
       color: civilianCarColors[index % civilianCarColors.length],
     });
+    addWalkTarget(chunk, point.x, point.y + 22);
   }
 
   return chunk;
@@ -1463,7 +1278,6 @@ function generateSandboxChunk(cx, cy) {
     key,
     cx,
     cy,
-    zone: "sandbox",
     originX,
     originY,
     roads: [],
@@ -1473,7 +1287,6 @@ function generateSandboxChunk(cx, cy) {
     policeSpawns: [],
     militarySpawns: [],
     ciaSpawns: [],
-    populated: false,
   };
 
   if (Math.abs(cx) > arenaRadius || Math.abs(cy) > arenaRadius) {
@@ -1549,10 +1362,10 @@ function ensureChunksAroundPlayer() {
 }
 
 // SECTION: npc logic
-function spawnCivilian(chunk, rng, options = {}) {
+function spawnCivilian(chunk, rng) {
   const spawn = sampleWalkTarget(chunk, rng);
   const target = sampleWalkTarget(chunk, rng);
-  const inCar = options.inCar ?? (rng() > 0.8);
+  const inCar = rng() > 0.8;
   const carColors = ["#6f8fae", "#8f4545", "#69845c", "#c18d42", "#72727e"];
   state.world.npcs.push({
     id: state.world.nextNpcId,
@@ -1576,165 +1389,17 @@ function spawnCivilian(chunk, rng, options = {}) {
     activeCar: null,
     carColor: carColors[randomInt(rng, 0, carColors.length - 1)],
     alive: true,
-    tint: (options.palette || ["#2e3b42", "#5a4738", "#46615a", "#544f69"])[randomInt(rng, 0, (options.palette || ["#2e3b42", "#5a4738", "#46615a", "#544f69"]).length - 1)],
-    style: options.style || "casual",
-    petKind: options.petKind || null,
-  });
-  state.world.nextNpcId += 1;
-}
-
-function getAnimalProfile(species) {
-  if (species === "wolf") return { radius: 8, tint: "#60666f" };
-  if (species === "bear") return { radius: 11, tint: "#6a4c3c" };
-  if (species === "fox") return { radius: 7, tint: "#bb6b3f" };
-  if (species === "owl") return { radius: 6, tint: "#83796c" };
-  if (species === "frog") return { radius: 5, tint: "#5e8c56" };
-  if (species === "beaver") return { radius: 7, tint: "#7a5a40" };
-  if (species === "porcupine") return { radius: 6, tint: "#74685f" };
-  if (species === "moose") return { radius: 11, tint: "#675141" };
-  if (species === "deer") return { radius: 8, tint: "#9f7b58" };
-  if (species === "fish") return { radius: 5, tint: "#6f97b5" };
-  if (species === "chicken") return { radius: 5, tint: "#ddd4c4" };
-  if (species === "horse") return { radius: 9, tint: "#7c5b45" };
-  if (species === "pig") return { radius: 7, tint: "#d0a3a5" };
-  if (species === "sheep") return { radius: 7, tint: "#e9e7df" };
-  if (species === "cow") return { radius: 9, tint: "#d7d0c3" };
-  return { radius: 7, tint: "#7c6b58" };
-}
-
-function spawnAnimal(chunk, rng, species, options = {}) {
-  const spawn = options.spawn || sampleWalkTarget(chunk, rng);
-  const target = sampleWalkTarget(chunk, rng);
-  const profile = getAnimalProfile(species);
-  state.world.npcs.push({
-    id: state.world.nextNpcId,
-    type: "animal",
-    species,
-    x: spawn.x + randomBetween(rng, -16, 16),
-    y: spawn.y + randomBetween(rng, -16, 16),
-    vx: 0,
-    vy: 0,
-    radius: profile.radius,
-    tint: profile.tint,
-    homeChunkKey: chunk.key,
-    targetX: target.x,
-    targetY: target.y,
-    timer: randomBetween(rng, 1.2, 3.6),
-    penned: Boolean(options.penned),
-    alive: true,
-  });
-  state.world.nextNpcId += 1;
-}
-
-function spawnBird(chunk, rng) {
-  const spawn = sampleWalkTarget(chunk, rng);
-  state.world.npcs.push({
-    id: state.world.nextNpcId,
-    type: "bird",
-    x: spawn.x + randomBetween(rng, -50, 50),
-    y: spawn.y + randomBetween(rng, -40, 40),
-    vx: randomBetween(rng, -0.8, 0.8),
-    vy: randomBetween(rng, -0.45, 0.45),
-    radius: 4,
-    homeChunkKey: chunk.key,
-    targetX: spawn.x,
-    targetY: spawn.y,
-    timer: randomBetween(rng, 0.7, 1.8),
-    wingOffset: randomBetween(rng, 0, Math.PI * 2),
-    alive: true,
+    tint: ["#2e3b42", "#5a4738", "#46615a", "#544f69"][randomInt(rng, 0, 3)],
   });
   state.world.nextNpcId += 1;
 }
 
 function spawnChunkPopulation(chunk) {
   const rng = mulberry32(hash2d(chunk.cx * 7 + 13, chunk.cy * 5 + 17));
-  const zone = chunk.zone || "neighborhood";
-
-  if (zone === "neighborhood") {
-    const population = randomInt(rng, 5, 8);
-    for (let index = 0; index < population; index += 1) {
-      spawnCivilian(chunk, rng, {
-        inCar: rng() > 0.74,
-        petKind: rng() > 0.82 ? "dog" : null,
-        palette: ["#405769", "#5b4e44", "#58746b", "#6a5b7d"],
-      });
-    }
-    for (let index = 0; index < randomInt(rng, 2, 4); index += 1) {
-      spawnBird(chunk, rng);
-    }
-  } else if (zone === "highway") {
-    const drivers = randomInt(rng, 4, 7);
-    for (let index = 0; index < drivers; index += 1) {
-      spawnCivilian(chunk, rng, {
-        inCar: true,
-        palette: ["#5f6b77", "#6e665e", "#53625c"],
-      });
-    }
-  } else if (zone === "city") {
-    const population = randomInt(rng, 8, 13);
-    for (let index = 0; index < population; index += 1) {
-      spawnCivilian(chunk, rng, {
-        inCar: rng() > 0.68,
-        style: rng() > 0.45 ? "suit" : "casual",
-        palette: ["#2c3441", "#5d4c44", "#354559", "#4d5561", "#6e5547"],
-      });
-    }
-    for (let index = 0; index < randomInt(rng, 1, 3); index += 1) {
-      spawnBird(chunk, rng);
-    }
-  } else if (zone === "desert") {
-    const workers = randomInt(rng, 0, 2);
-    for (let index = 0; index < workers; index += 1) {
-      spawnCivilian(chunk, rng, {
-        inCar: rng() > 0.55,
-        palette: ["#72624f", "#6d7568", "#8a7764"],
-      });
-    }
-  } else {
-    const people = randomInt(rng, 2, 5);
-    for (let index = 0; index < people; index += 1) {
-      spawnCivilian(chunk, rng, {
-        inCar: rng() > 0.88,
-        palette: ["#546d46", "#7d684f", "#45616b", "#6f5f54"],
-      });
-    }
-    for (let index = 0; index < randomInt(rng, 3, 5); index += 1) {
-      spawnBird(chunk, rng);
-    }
-    const wildSpecies = ["wolf", "bear", "fox", "owl", "frog", "beaver", "porcupine", "moose", "deer"];
-    const animalCount = randomInt(rng, 4, 7);
-    for (let index = 0; index < animalCount; index += 1) {
-      spawnAnimal(chunk, rng, wildSpecies[randomInt(rng, 0, wildSpecies.length - 1)]);
-    }
-    if (chunk.decor.some((deco) => deco.type === "river")) {
-      for (let index = 0; index < 3; index += 1) {
-        const river = chunk.decor.find((deco) => deco.type === "river");
-        spawnAnimal(chunk, rng, "fish", {
-          penned: true,
-          spawn: {
-            x: river.x + randomBetween(rng, 20, river.w - 20),
-            y: river.y + randomBetween(rng, 20, river.h - 20),
-          },
-        });
-      }
-    }
-    if (chunk.buildings.some((building) => building.kind === "barn")) {
-      const barnAnimals = ["chicken", "horse", "pig", "sheep", "cow"];
-      const barn = chunk.buildings.find((building) => building.kind === "barn");
-      const count = randomInt(rng, 3, 6);
-      for (let index = 0; index < count; index += 1) {
-        spawnAnimal(chunk, rng, barnAnimals[randomInt(rng, 0, barnAnimals.length - 1)], {
-          penned: true,
-          spawn: {
-            x: barn.x + randomBetween(rng, 18, barn.w - 18),
-            y: barn.y + barn.h + randomBetween(rng, 18, 72),
-          },
-        });
-      }
-    }
+  const population = randomInt(rng, 5, 8);
+  for (let index = 0; index < population; index += 1) {
+    spawnCivilian(chunk, rng);
   }
-
-  chunk.populated = true;
 }
 
 function ensureChunkPopulation() {
@@ -1743,7 +1408,8 @@ function ensureChunkPopulation() {
   }
   const loadedKeys = new Set(state.world.chunks.keys());
   for (const chunk of state.world.chunks.values()) {
-    if (!chunk.populated) {
+    const hasPopulation = state.world.npcs.some((npc) => npc.homeChunkKey === chunk.key && npc.type === "civilian");
+    if (!hasPopulation) {
       spawnChunkPopulation(chunk);
     }
   }
@@ -1779,14 +1445,9 @@ function adjustSandboxPlayerSize(delta) {
 }
 
 function desiredPoliceCount() {
-  const zone = getCurrentWorldZone();
   const sizePressure = Math.floor(state.player.absorbedHumans / 4);
   const alertPressure = Math.floor(state.world.alert / 24);
-  if (zone !== "neighborhood" && !isEnemySpreadUnlocked("police")) {
-    return 0;
-  }
-  const base = zone === "neighborhood" ? 1 : 0;
-  return Math.min(12, base + sizePressure + alertPressure + (state.player.absorbedHumans >= 3 ? 1 : 0));
+  return Math.min(12, sizePressure + alertPressure + (state.player.absorbedHumans >= 3 ? 1 : 0));
 }
 
 function shouldSpawnPoliceBoss() {
@@ -1857,39 +1518,26 @@ function createCIAWormState() {
 
 function desiredMilitaryCounts() {
   const size = state.player.absorbedHumans;
-  const zone = getCurrentWorldZone();
-  if (zone !== "desert" && !isEnemySpreadUnlocked("military")) {
-    return { militarySoldier: 0, militaryGrenadier: 0, tank: 0, helicopter: 0 };
-  }
-  const base = zone === "desert" ? 1 : 0;
   return {
-    militarySoldier: Math.min(5, base + (size >= 6 ? 1 + Math.floor((size - 6) / 7) : 0)),
-    militaryGrenadier: Math.min(3, zone === "desert" ? (size >= 6 ? 1 + Math.floor(Math.max(0, size - 10) / 10) : 0) : (size >= 10 ? 1 + Math.floor((size - 10) / 10) : 0)),
-    tank: zone === "desert" ? Math.min(2, size >= 12 ? 1 + Math.floor(Math.max(0, size - 16) / 16) : 0) : (size >= 16 ? Math.min(2, 1 + Math.floor((size - 16) / 16)) : 0),
-    helicopter: zone === "desert" ? Math.min(2, size >= 18 ? 1 + Math.floor(Math.max(0, size - 24) / 20) : 0) : (size >= 24 ? Math.min(2, 1 + Math.floor((size - 24) / 20)) : 0),
+    militarySoldier: size >= 6 ? Math.min(5, 1 + Math.floor((size - 6) / 7)) : 0,
+    militaryGrenadier: size >= 10 ? Math.min(3, 1 + Math.floor((size - 10) / 10)) : 0,
+    tank: size >= 16 ? Math.min(2, 1 + Math.floor((size - 16) / 16)) : 0,
+    helicopter: size >= 24 ? Math.min(2, 1 + Math.floor((size - 24) / 20)) : 0,
   };
 }
 
 function desiredCIASquads() {
   const size = state.player.absorbedHumans;
-  const zone = getCurrentWorldZone();
-  if (zone !== "city" && !isEnemySpreadUnlocked("cia") && size < 26) {
+  if (size < 26) {
     return 0;
-  }
-  if (zone === "city" && size < 26) {
-    return 1;
   }
   return size >= 44 ? 2 : 1;
 }
 
 function desiredAlienCount() {
   const size = state.player.absorbedHumans;
-  const zone = getCurrentWorldZone();
-  if (zone !== "country" && !isEnemySpreadUnlocked("alien") && size < 40) {
+  if (size < 40) {
     return 0;
-  }
-  if (zone === "country" && size < 40) {
-    return 1;
   }
   return size >= 58 ? 2 : 1;
 }
@@ -2251,12 +1899,7 @@ function placeSandboxStructure(id, x, y) {
 function spawnMilitary(type) {
   const { cx, cy } = getChunkCoords(state.player.x, state.player.y);
   const rng = mulberry32(hash2d(cx * 31 + state.world.nextNpcId, cy * 17 - state.world.nextNpcId));
-  const militarySpawns = getLoadedMilitarySpawns();
-  const fallbackAllowed = isEnemySpreadUnlocked("military");
-  const spawnPool =
-    type === "helicopter"
-      ? getHelicopterSpawnPoints(260)
-      : (militarySpawns.length ? militarySpawns : (fallbackAllowed ? getLoadedWalkSpawns(240) : []));
+  const spawnPool = type === "helicopter" ? getHelicopterSpawnPoints(260) : (getLoadedMilitarySpawns().length ? getLoadedMilitarySpawns() : getLoadedWalkSpawns(240));
   if (!spawnPool.length) {
     return false;
   }
@@ -2310,7 +1953,7 @@ function spawnCIASquad() {
   const { cx, cy } = getChunkCoords(state.player.x, state.player.y);
   const rng = mulberry32(hash2d(cx * 41 + state.world.nextNpcId, cy * 29 - state.world.nextNpcId));
   const ciaSpawns = getLoadedCIASpawns();
-  const roadSpawns = isEnemySpreadUnlocked("cia") ? getLoadedRoadSpawns(300) : [];
+  const roadSpawns = getLoadedRoadSpawns(300);
   const spawnPool = ciaSpawns.length ? ciaSpawns.map((spawn) => ({ ...spawn, roadType: "horizontal" })) : roadSpawns;
   if (!spawnPool.length) {
     return false;
@@ -2646,7 +2289,7 @@ function spawnPolice() {
   const { cx, cy } = getChunkCoords(state.player.x, state.player.y);
   const rng = mulberry32(hash2d(cx + state.world.nextNpcId, cy - state.world.nextNpcId));
   const stationSpawns = getLoadedPoliceSpawns().filter((spawn) => distanceBetween(spawn.x, spawn.y, state.player.x, state.player.y) > 180);
-  const fallbackSpawns = isEnemySpreadUnlocked("police") ? getLoadedWalkSpawns(180) : [];
+  const fallbackSpawns = getLoadedWalkSpawns(180);
   const sourcePool = stationSpawns.length ? stationSpawns : fallbackSpawns;
   if (!sourcePool.length) {
     return false;
@@ -3351,64 +2994,6 @@ function updateCivilian(npc, dt) {
       npc.timer = 2 + Math.random() * 3;
     }
     steerEntity(npc, npc.targetX, npc.targetY, 0.055, CONFIG.civilianSpeed, dt);
-  }
-}
-
-function updateAnimal(npc, dt) {
-  const distance = distanceBetween(npc.x, npc.y, state.player.x, state.player.y);
-  if (distance < getPlayerAbsorbRadius() + npc.radius) {
-    absorbNpc(npc);
-    return;
-  }
-
-  const fleeRange = npc.species === "bear" || npc.species === "moose" ? 90 : 70;
-  if (distance < fleeRange && !npc.penned) {
-    const dx = npc.x - state.player.x;
-    const dy = npc.y - state.player.y;
-    const away = Math.hypot(dx, dy) || 0.0001;
-    steerEntity(npc, npc.x + (dx / away) * 120, npc.y + (dy / away) * 120, 0.09, 1.9 + npc.radius * 0.04, dt);
-    return;
-  }
-
-  npc.timer -= dt;
-  if (npc.timer <= 0 || distanceBetween(npc.x, npc.y, npc.targetX, npc.targetY) < 12) {
-    const target = chooseNearbyWalkTarget(npc);
-    npc.targetX = npc.penned ? lerp(npc.x, target.x, 0.25) : target.x;
-    npc.targetY = npc.penned ? lerp(npc.y, target.y, 0.25) : target.y;
-    npc.timer = 1.8 + Math.random() * 2.6;
-  }
-  steerEntity(npc, npc.targetX, npc.targetY, 0.04, 0.85 + npc.radius * 0.03, dt);
-}
-
-function updateBird(npc, dt) {
-  if (distanceBetween(npc.x, npc.y, state.player.x, state.player.y) < getPlayerAbsorbRadius() + npc.radius + 6) {
-    absorbNpc(npc);
-    return;
-  }
-  npc.timer -= dt;
-  if (npc.timer <= 0) {
-    npc.targetX += randomBetween(Math.random, -80, 80);
-    npc.targetY += randomBetween(Math.random, -50, 50);
-    npc.timer = 0.6 + Math.random() * 1.4;
-  }
-  const dx = npc.targetX - npc.x;
-  const dy = npc.targetY - npc.y;
-  const distance = Math.hypot(dx, dy) || 0.0001;
-  npc.vx += (dx / distance) * 0.06 * dt * 60;
-  npc.vy += (dy / distance) * 0.05 * dt * 60;
-  npc.vx *= 0.96;
-  npc.vy *= 0.96;
-  const speed = Math.hypot(npc.vx, npc.vy);
-  if (speed > 2.2) {
-    const factor = 2.2 / speed;
-    npc.vx *= factor;
-    npc.vy *= factor;
-  }
-  npc.x += npc.vx;
-  npc.y += npc.vy;
-  if (speed > 0.02) {
-    npc.faceX = npc.vx / speed;
-    npc.faceY = npc.vy / speed;
   }
 }
 
@@ -4900,10 +4485,6 @@ function updateNpcs(dt) {
     applyEarthquakeToNpc(npc, dt);
     if (npc.type === "civilian") {
       updateCivilian(npc, dt);
-    } else if (npc.type === "animal") {
-      updateAnimal(npc, dt);
-    } else if (npc.type === "bird") {
-      updateBird(npc, dt);
     } else if (npc.type === "police") {
       updatePolice(npc, dt);
     } else if (npc.type === "policeBoss") {
@@ -5451,22 +5032,6 @@ function drawBuilding(building) {
   ctx.fillStyle = building.kind === "marketHall" ? "rgba(176, 62, 62, 0.75)" : "rgba(255, 242, 212, 0.72)";
   if (building.kind === "marketHall") {
     ctx.fillRect(screen.x, screen.y, building.w, 14);
-  } else if (building.kind === "skyscraper") {
-    ctx.fillStyle = "#5e6976";
-    ctx.fillRect(screen.x, screen.y, building.w, building.h);
-    ctx.fillStyle = "#8c9aac";
-    for (let y = 18; y < building.h - 24; y += 22) {
-      for (let x = 14; x < building.w - 18; x += 18) {
-        ctx.fillRect(screen.x + x, screen.y + y, 8, 10);
-      }
-    }
-  } else if (building.kind === "officeTower") {
-    ctx.fillStyle = "#66707b";
-    ctx.fillRect(screen.x, screen.y, building.w, building.h);
-    ctx.fillStyle = "#a2b1bf";
-    for (let y = 18; y < building.h - 18; y += 24) {
-      ctx.fillRect(screen.x + 14, screen.y + y, building.w - 28, 8);
-    }
   } else if (building.kind === "militaryBase") {
     ctx.fillStyle = "#40513f";
     ctx.fillRect(screen.x, screen.y, building.w, 12);
@@ -5525,30 +5090,6 @@ function drawBuilding(building) {
   } else if (building.kind === "policeAnnex") {
     ctx.fillStyle = "#c7d2dc";
     ctx.fillRect(screen.x + 12, screen.y + 8, building.w - 24, building.h - 16);
-  } else if (building.kind === "farmhouse") {
-    ctx.fillStyle = "#efe2c6";
-    ctx.fillRect(screen.x, screen.y + 14, building.w, building.h - 14);
-    ctx.fillStyle = "#94634f";
-    ctx.beginPath();
-    ctx.moveTo(screen.x - 4, screen.y + 18);
-    ctx.lineTo(screen.x + building.w * 0.5, screen.y - 12);
-    ctx.lineTo(screen.x + building.w + 4, screen.y + 18);
-    ctx.closePath();
-    ctx.fill();
-    ctx.fillStyle = "#815845";
-    ctx.fillRect(screen.x + building.w * 0.45, screen.y + building.h - 28, 16, 28);
-  } else if (building.kind === "barn") {
-    ctx.fillStyle = "#a04e42";
-    ctx.fillRect(screen.x, screen.y + 12, building.w, building.h - 12);
-    ctx.fillStyle = "#6f342c";
-    ctx.beginPath();
-    ctx.moveTo(screen.x - 4, screen.y + 14);
-    ctx.lineTo(screen.x + building.w * 0.5, screen.y - 18);
-    ctx.lineTo(screen.x + building.w + 4, screen.y + 14);
-    ctx.closePath();
-    ctx.fill();
-    ctx.fillStyle = "#e9d5bf";
-    ctx.fillRect(screen.x + building.w * 0.45, screen.y + building.h - 38, 22, 38);
   } else {
     for (let y = 14; y < building.h - 18; y += 26) {
       for (let x = 14; x < building.w - 18; x += 24) {
@@ -5612,42 +5153,6 @@ function drawDecor(deco) {
     ctx.fillRect(screen.x, screen.y + 10, deco.w, deco.h - 10);
     ctx.fillStyle = deco.awning;
     ctx.fillRect(screen.x, screen.y, deco.w, 14);
-  } else if (deco.type === "river") {
-    ctx.fillStyle = "#69a3cf";
-    ctx.fillRect(screen.x, screen.y, deco.w, deco.h);
-    ctx.fillStyle = "rgba(255,255,255,0.18)";
-    for (let x = 0; x < deco.w; x += 46) {
-      ctx.fillRect(screen.x + x, screen.y + deco.h * 0.3, 24, 3);
-    }
-  } else if (deco.type === "serviceStop") {
-    ctx.fillStyle = "#d6c2a1";
-    ctx.fillRect(screen.x, screen.y + 20, deco.w, deco.h - 20);
-    ctx.fillStyle = "#b44d3d";
-    ctx.fillRect(screen.x, screen.y, deco.w, 22);
-  } else if (deco.type === "cactus") {
-    ctx.fillStyle = "#5f8c53";
-    ctx.fillRect(screen.x - 5, screen.y - deco.size, 10, deco.size * 2);
-    ctx.fillRect(screen.x - 14, screen.y - 4, 8, deco.size);
-    ctx.fillRect(screen.x + 6, screen.y - 2, 8, deco.size * 0.8);
-  } else if (deco.type === "tumbleweed") {
-    ctx.strokeStyle = "#9a7b4d";
-    ctx.lineWidth = 2;
-    ctx.beginPath();
-    ctx.arc(screen.x, screen.y, deco.size, 0, Math.PI * 2);
-    ctx.stroke();
-    ctx.beginPath();
-    ctx.moveTo(screen.x - deco.size, screen.y);
-    ctx.lineTo(screen.x + deco.size, screen.y);
-    ctx.moveTo(screen.x, screen.y - deco.size);
-    ctx.lineTo(screen.x, screen.y + deco.size);
-    ctx.stroke();
-  } else if (deco.type === "flower") {
-    ctx.fillStyle = deco.color || "#8b63c5";
-    ctx.beginPath();
-    ctx.arc(screen.x, screen.y, 4, 0, Math.PI * 2);
-    ctx.fill();
-    ctx.fillStyle = "#4c8644";
-    ctx.fillRect(screen.x - 1, screen.y, 2, 8);
   } else if (deco.type === "plaza") {
     ctx.fillStyle = "#c9c2b2";
     ctx.fillRect(screen.x, screen.y, deco.w, deco.h);
@@ -5698,14 +5203,7 @@ function drawTown() {
 
   for (const chunk of getLoadedChunks()) {
     const screen = worldToScreen(chunk.originX, chunk.originY);
-    const zone = chunk.zone || "neighborhood";
-    const zoneFill =
-      zone === "neighborhood" ? `rgba(${Math.round(128 + dayNight.daylight * 92)}, ${Math.round(155 + dayNight.daylight * 88)}, ${Math.round(114 + dayNight.daylight * 86)}, 1)` :
-      zone === "highway" ? `rgba(${Math.round(116 + dayNight.daylight * 38)}, ${Math.round(118 + dayNight.daylight * 40)}, ${Math.round(112 + dayNight.daylight * 36)}, 1)` :
-      zone === "city" ? `rgba(${Math.round(106 + dayNight.daylight * 54)}, ${Math.round(110 + dayNight.daylight * 56)}, ${Math.round(112 + dayNight.daylight * 58)}, 1)` :
-      zone === "desert" ? `rgba(${Math.round(168 + dayNight.daylight * 70)}, ${Math.round(142 + dayNight.daylight * 62)}, ${Math.round(88 + dayNight.daylight * 42)}, 1)` :
-      `rgba(${Math.round(118 + dayNight.daylight * 102)}, ${Math.round(146 + dayNight.daylight * 92)}, ${Math.round(104 + dayNight.daylight * 78)}, 1)`;
-    ctx.fillStyle = zoneFill;
+    ctx.fillStyle = `rgba(${Math.round(96 + dayNight.daylight * 104)}, ${Math.round(112 + dayNight.daylight * 95)}, ${Math.round(92 + dayNight.daylight * 98)}, 1)`;
     ctx.fillRect(screen.x, screen.y, CONFIG.chunkSize, CONFIG.chunkSize);
     for (const road of chunk.roads) {
       drawRoad(road);
@@ -5955,61 +5453,6 @@ function drawNpc(npc) {
     ctx.beginPath();
     ctx.arc(screen.x, screen.y - npc.radius * 0.9, npc.radius * 0.55, 0, Math.PI * 2);
     ctx.fill();
-    if (npc.style === "suit") {
-      ctx.fillStyle = "#1a1d22";
-      ctx.fillRect(screen.x - 4, screen.y - 1, 8, 11);
-      ctx.fillStyle = "#e8edf2";
-      ctx.fillRect(screen.x - 1, screen.y - 1, 2, 9);
-      ctx.fillStyle = "#aa2a2a";
-      ctx.fillRect(screen.x - 1, screen.y + 4, 2, 5);
-    }
-    if (npc.petKind === "dog") {
-      ctx.fillStyle = "#7a634d";
-      ctx.beginPath();
-      ctx.ellipse(screen.x - 12, screen.y + 7, 6, 4, 0, 0, Math.PI * 2);
-      ctx.fill();
-      ctx.fillRect(screen.x - 15, screen.y + 4, 3, 5);
-      ctx.fillRect(screen.x - 8, screen.y + 4, 3, 5);
-      ctx.strokeStyle = "#574638";
-      ctx.lineWidth = 1.4;
-      ctx.beginPath();
-      ctx.moveTo(screen.x - 6, screen.y + 2);
-      ctx.lineTo(screen.x - 1, screen.y - 1);
-      ctx.stroke();
-    }
-  } else if (npc.type === "animal") {
-    ctx.fillStyle = npc.tint;
-    ctx.beginPath();
-    ctx.ellipse(screen.x, screen.y, npc.radius, npc.radius * 0.72, 0, 0, Math.PI * 2);
-    ctx.fill();
-    if (npc.species === "moose" || npc.species === "deer") {
-      ctx.strokeStyle = "#6a513e";
-      ctx.lineWidth = 1.6;
-      ctx.beginPath();
-      ctx.moveTo(screen.x - 2, screen.y - npc.radius * 0.7);
-      ctx.lineTo(screen.x - 6, screen.y - npc.radius - 4);
-      ctx.moveTo(screen.x + 2, screen.y - npc.radius * 0.7);
-      ctx.lineTo(screen.x + 6, screen.y - npc.radius - 4);
-      ctx.stroke();
-    } else if (npc.species === "porcupine") {
-      ctx.strokeStyle = "#8a7f73";
-      ctx.lineWidth = 1.3;
-      for (let index = -2; index <= 2; index += 1) {
-        ctx.beginPath();
-        ctx.moveTo(screen.x + index * 2, screen.y - 1);
-        ctx.lineTo(screen.x + index * 3, screen.y - npc.radius - 2);
-        ctx.stroke();
-      }
-    }
-  } else if (npc.type === "bird") {
-    const flap = Math.sin(state.time * 14 + npc.wingOffset) * 3.5;
-    ctx.strokeStyle = "#2f3439";
-    ctx.lineWidth = 2;
-    ctx.beginPath();
-    ctx.moveTo(screen.x - 6, screen.y);
-    ctx.quadraticCurveTo(screen.x - 2, screen.y - flap, screen.x, screen.y);
-    ctx.quadraticCurveTo(screen.x + 2, screen.y - flap, screen.x + 6, screen.y);
-    ctx.stroke();
   } else if (npc.type === "policeBoss") {
     const faceX = npc.faceX || 1;
     const faceY = npc.faceY || 0;
