@@ -751,6 +751,26 @@ function resolveEntityAgainstBuildings(entity, radius) {
   }
 }
 
+function resolveEntityAgainstCIAWormHoles(entity, radius) {
+  const worm = state.world.ciaWorm;
+  if (!worm) {
+    return;
+  }
+  for (const hole of worm.holes) {
+    const dx = entity.x - hole.x;
+    const dy = entity.y - hole.y;
+    const ellipseFactor = 0.72;
+    const scaledDistance = Math.hypot(dx, dy / ellipseFactor) || 0.0001;
+    const safeRadius = hole.radius + radius;
+    if (scaledDistance >= safeRadius) {
+      continue;
+    }
+    const overlap = safeRadius - scaledDistance;
+    entity.x += (dx / scaledDistance) * overlap;
+    entity.y += ((dy / ellipseFactor) / scaledDistance) * overlap * ellipseFactor;
+  }
+}
+
 function lineOfSightBlocked(x1, y1, x2, y2) {
   for (const building of getLoadedBuildings()) {
     if (segmentIntersectsRect(x1, y1, x2, y2, building)) {
@@ -4792,6 +4812,7 @@ function updatePlayer(dt) {
   state.player.y += state.player.vy;
   state.player.radius = CONFIG.playerRadiusBase + Math.min(26, Math.sqrt(state.player.followers.length) * CONFIG.playerRadiusGrowth);
   resolveEntityAgainstBuildings(state.player, state.player.radius);
+  resolveEntityAgainstCIAWormHoles(state.player, state.player.radius);
   state.player.morphName = getMorphProfile();
   leaveBloodTrail(dt);
   const nodeRadius = getNodeRadius();
@@ -5264,11 +5285,11 @@ function drawCIAWormHoles() {
   }
   for (const hole of worm.holes) {
     const screen = worldToScreen(hole.x, hole.y);
-    ctx.fillStyle = "rgba(34, 16, 12, 0.3)";
+    ctx.fillStyle = "#000000";
     ctx.beginPath();
     ctx.ellipse(screen.x, screen.y, hole.radius, hole.radius * 0.72, 0, 0, Math.PI * 2);
     ctx.fill();
-    ctx.strokeStyle = "rgba(116, 70, 58, 0.24)";
+    ctx.strokeStyle = "#000000";
     ctx.lineWidth = Math.max(3, hole.radius * 0.04);
     ctx.beginPath();
     ctx.ellipse(screen.x, screen.y, hole.radius * 0.92, hole.radius * 0.62, 0, 0, Math.PI * 2);
