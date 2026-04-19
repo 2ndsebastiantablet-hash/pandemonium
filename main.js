@@ -129,8 +129,8 @@ const CONFIG = {
   ciaSkeletonDamage: 10,
   ciaSkeletonShotCooldown: 1.8,
   ciaSlothHealth: 360,
-  ciaSlothSpeed: 1.55,
-  ciaSlothArmReach: 170,
+  ciaSlothSpeed: 1.28,
+  ciaSlothArmReach: 320,
   ciaSlothSmashCooldown: 1.4,
   ciaSlothThrowCooldown: 3.8,
   ciaSlothEatCooldown: 3.1,
@@ -142,7 +142,7 @@ const CONFIG = {
   ciaSlothBeamDamage: 26,
   ciaSlothBeamWidth: 28,
   ciaSlothQuakeStrength: 0.92,
-  ciaSlothGrabRange: 96,
+  ciaSlothGrabRange: 165,
   militaryBaseCannonRange: 430,
   militaryBaseMinigunRange: 320,
   militaryBaseCannonCooldown: 2.6,
@@ -212,6 +212,8 @@ const state = {
     morphName: "seed",
     slimeTimer: 0,
     bloodTimer: 0,
+    heldByBoss: null,
+    thrownTimer: 0,
   },
   world: {
     chunks: new Map(),
@@ -1693,7 +1695,7 @@ function createCIASlothBossNpc(spawnPoint, rng) {
     y: spawnPoint.y,
     vx: 0,
     vy: 0,
-    radius: 34,
+    radius: 132,
     homeChunkKey: spawnPoint.chunkKey,
     targetX: spawnPoint.x,
     targetY: spawnPoint.y,
@@ -1717,6 +1719,7 @@ function createCIASlothBossNpc(spawnPoint, rng) {
     beamFireTimer: 0,
     contactCooldown: 0,
     heldNpcId: null,
+    holdingPlayer: false,
     altitude: 0,
     armSwing: randomBetween(rng, 0, Math.PI * 2),
     title: "The Colossus Sloth",
@@ -3230,20 +3233,12 @@ function damageCIABatBoss(npc, amount, sourceX, sourceY) {
 }
 
 function damageCIASlothBoss(npc, amount, sourceX, sourceY) {
-  npc.health = clamp(npc.health - amount, 0, npc.maxHealth);
   const dx = npc.x - sourceX;
   const dy = npc.y - sourceY;
   const distance = Math.hypot(dx, dy) || 0.0001;
-  npc.vx += (dx / distance) * 0.42;
-  npc.vy += (dy / distance) * 0.42;
-  if (npc.health <= 0) {
-    const held = state.world.npcs.find((other) => other.id === npc.heldNpcId);
-    if (held) {
-      held.heldByBoss = null;
-      held.thrownTimer = 0.9;
-    }
-    absorbNpc(npc);
-  }
+  npc.vx += (dx / distance) * 0.18;
+  npc.vy += (dy / distance) * 0.18;
+  spawnVisualBurst(npc.x, npc.y - npc.radius * 0.3, 18 + Math.min(28, amount), "rgba(124, 78, 54, 0.34)");
 }
 
 function killNpcByCIASloth(npc, sourceX, sourceY) {
@@ -3294,6 +3289,16 @@ function spawnBatLaserBolt(npc, damageScale = 1) {
 }
 
 function chooseCIASlothTarget(npc) {
+  const playerDistance = distanceBetween(npc.x, npc.y, state.player.x, state.player.y);
+  if (playerDistance < 760 || Math.random() > 0.45) {
+    return { x: state.player.x, y: state.player.y, type: "player" };
+  }
+
+  const targetNpc = findNearestVictimForCIASloth(npc, 560, { includePlayer: false, anyNpc: true });
+  if (targetNpc) {
+    return { x: targetNpc.x, y: targetNpc.y, type: targetNpc.type, id: targetNpc.id };
+  }
+
   const rng = mulberry32(hash2d(npc.id * 67, Math.floor(state.time * 7) + state.world.nextNpcId));
   const anchor = getLoadedCIASpawns();
   if (anchor.length && rng() > 0.35) {
@@ -3313,17 +3318,28 @@ function chooseCIASlothTarget(npc) {
   return {
     x: state.player.x + Math.cos(angle) * distance,
     y: state.player.y + Math.sin(angle) * distance,
+    type: "wander",
   };
 }
 
-function findNearestVictimForCIASloth(npc, radius) {
+function findNearestVictimForCIASloth(npc, radius, options = {}) {
   let best = null;
   let bestDistance = radius;
+  if (options.includePlayer !== false) {
+    const playerDistance = distanceBetween(npc.x, npc.y, state.player.x, state.player.y) * 0.72;
+    if (!state.player.heldByBoss && playerDistance < bestDistance) {
+      best = { type: "player", distance: playerDistance };
+      bestDistance = playerDistance;
+    }
+  }
   for (const other of state.world.npcs) {
     if (!other.alive || other.id === npc.id || other.heldByBoss) {
       continue;
     }
-    if (other.type !== "civilian") {
+    if (!options.anyNpc && other.type !== "civilian") {
+      continue;
+    }
+    if (["ciaWorm", "ciaSlothBoss"].includes(other.type)) {
       continue;
     }
     const distance = distanceBetween(npc.x, npc.y, other.x, other.y);
@@ -3363,9 +3379,10 @@ function damageStructuresAroundCIASloth(npc, impactScale = 1) {
 }
 
 function getCIASlothMouthPosition(npc) {
+  const scale = npc.radius / 34;
   return {
-    x: npc.x + (npc.faceX || 1) * 20,
-    y: npc.y + (npc.faceY || 0) * 20 - 26,
+    x: npc.x + (npc.faceX || 1) * 34 * scale,
+    y: npc.y + (npc.faceY || 0) * 28 * scale - 70 * scale,
   };
 }
 
@@ -4661,7 +4678,6 @@ function updateCIABatBoss(npc, dt) {
 }
 
 function updateCIASlothBoss(npc, dt) {
-  const touchingSwarm = getNpcSwarmContact(npc);
   npc.smashCooldown -= dt;
   npc.throwCooldown -= dt;
   npc.eatCooldown -= dt;
@@ -4675,19 +4691,13 @@ function updateCIASlothBoss(npc, dt) {
   npc.armSwing += dt * 1.6;
   npc.altitude = Math.max(0, (npc.altitude || 0) - dt * 140);
 
-  if (touchingSwarm && npc.contactCooldown <= 0) {
-    damageCIASlothBoss(npc, 12 + Math.max(0, touchingSwarm.touchCount - 1) * 3, state.player.x, state.player.y);
-    npc.contactCooldown = 0.18;
-    if (!npc.alive) {
-      return;
-    }
-  }
-
   npc.timer -= dt;
   if (npc.timer <= 0 || distanceBetween(npc.x, npc.y, npc.targetX, npc.targetY) < 28) {
     const target = chooseCIASlothTarget(npc);
     npc.targetX = target.x;
     npc.targetY = target.y;
+    npc.targetType = target.type || "wander";
+    npc.targetId = target.id || null;
     npc.timer = 2.6 + Math.random() * 3.4;
   }
 
@@ -4706,9 +4716,21 @@ function updateCIASlothBoss(npc, dt) {
   state.world.alert = clamp(state.world.alert + 22 * dt, 0, 100);
 
   const heldNpc = state.world.npcs.find((other) => other.id === npc.heldNpcId && other.alive);
+  const scale = npc.radius / 34;
+  if (npc.holdingPlayer && state.player.heldByBoss === npc.id) {
+    state.player.x = npc.x + npc.faceX * 88 * scale - npc.faceY * 42 * scale;
+    state.player.y = npc.y + npc.faceY * 88 * scale + npc.faceX * 42 * scale - 112 * scale - npc.altitude * 0.08;
+    state.player.vx = 0;
+    state.player.vy = 0;
+  } else {
+    npc.holdingPlayer = false;
+    if (state.player.heldByBoss === npc.id) {
+      state.player.heldByBoss = null;
+    }
+  }
   if (heldNpc) {
-    heldNpc.x = npc.x + npc.faceX * 44 - npc.faceY * 26;
-    heldNpc.y = npc.y + npc.faceY * 44 + npc.faceX * 26 - 38 - npc.altitude * 0.08;
+    heldNpc.x = npc.x + npc.faceX * 70 * scale - npc.faceY * 30 * scale;
+    heldNpc.y = npc.y + npc.faceY * 70 * scale + npc.faceX * 30 * scale - 72 * scale - npc.altitude * 0.08;
   } else {
     npc.heldNpcId = null;
   }
@@ -4733,18 +4755,33 @@ function updateCIASlothBoss(npc, dt) {
     npc.beamPending = true;
   }
 
-  const victim = findNearestVictimForCIASloth(npc, CONFIG.ciaSlothGrabRange);
-  if (!isBeaming && !heldNpc && victim) {
-    if (npc.eatCooldown <= 0 && Math.random() > 0.45) {
+  const victim = findNearestVictimForCIASloth(npc, CONFIG.ciaSlothGrabRange, { includePlayer: true, anyNpc: true });
+  if (!isBeaming && !heldNpc && !npc.holdingPlayer && victim) {
+    if (victim.type === "player" && npc.throwCooldown <= 0) {
+      state.player.heldByBoss = npc.id;
+      state.player.thrownTimer = 0;
+      npc.holdingPlayer = true;
+      damagePlayer(12, npc.x, npc.y, 0.3);
+      npc.throwCooldown = CONFIG.ciaSlothThrowCooldown;
+    } else if (victim.type !== "player" && npc.eatCooldown <= 0 && Math.random() > 0.55) {
       killNpcByCIASloth(victim, npc.x, npc.y);
       npc.eatCooldown = CONFIG.ciaSlothEatCooldown;
-    } else if (npc.throwCooldown <= 0) {
+    } else if (victim.type !== "player" && npc.throwCooldown <= 0) {
       npc.heldNpcId = victim.id;
       victim.heldByBoss = npc.id;
       victim.vx = 0;
       victim.vy = 0;
       npc.throwCooldown = CONFIG.ciaSlothThrowCooldown;
     }
+  } else if (npc.holdingPlayer && npc.throwCooldown <= CONFIG.ciaSlothThrowCooldown - 0.8) {
+    const angle = Math.atan2((Math.random() - 0.5) * 0.6 + npc.faceY, (Math.random() - 0.5) * 0.6 + npc.faceX);
+    npc.holdingPlayer = false;
+    state.player.heldByBoss = null;
+    state.player.thrownTimer = 1.35;
+    state.player.vx = Math.cos(angle) * 9.4;
+    state.player.vy = Math.sin(angle) * 9.4;
+    damagePlayer(20, npc.x, npc.y, 1.9);
+    npc.throwCooldown = CONFIG.ciaSlothThrowCooldown;
   } else if (heldNpc && npc.throwCooldown <= CONFIG.ciaSlothThrowCooldown - 0.8) {
     const angle = Math.atan2((Math.random() - 0.5) * 0.5 + npc.faceY, (Math.random() - 0.5) * 0.5 + npc.faceX);
     heldNpc.heldByBoss = null;
@@ -5839,37 +5876,54 @@ function getFollowerTarget(index, total, profile, dirX, dirY) {
 }
 
 function updatePlayer(dt) {
-  const target = getPointerWorldTarget();
-  const dx = target.x - state.player.x;
-  const dy = target.y - state.player.y;
-  const distance = Math.hypot(dx, dy) || 0.0001;
-  const dirX = dx / distance;
-  const dirY = dy / distance;
-  const speedStats = getPlayerSpeedStats();
   const growthStats = getPlayerGrowthStats();
 
   state.player.maxHealth = growthStats.maxHealth;
   state.player.health = Math.min(state.player.maxHealth, state.player.health + dt * (0.08 + Math.sqrt(state.player.absorbedHumans + 1) * 0.02));
+  state.player.radius = CONFIG.playerRadiusBase + Math.min(26, Math.sqrt(state.player.followers.length) * CONFIG.playerRadiusGrowth);
 
-  state.player.lastDirX = dirX;
-  state.player.lastDirY = dirY;
-  state.player.vx += dx * speedStats.seekStrength * dt * 60;
-  state.player.vy += dy * speedStats.seekStrength * dt * 60;
-  state.player.vx *= CONFIG.playerDrag;
-  state.player.vy *= CONFIG.playerDrag;
+  if (state.player.heldByBoss) {
+    state.player.vx = 0;
+    state.player.vy = 0;
+  } else if (state.player.thrownTimer > 0) {
+    state.player.thrownTimer = Math.max(0, state.player.thrownTimer - dt);
+    state.player.x += state.player.vx;
+    state.player.y += state.player.vy;
+    state.player.vx *= 0.986;
+    state.player.vy *= 0.986;
+    resolveEntityAgainstBuildings(state.player, state.player.radius);
+    resolveEntityAgainstCIAWormHoles(state.player, state.player.radius);
+    state.player.lastDirX = Math.abs(state.player.vx) + Math.abs(state.player.vy) > 0.01 ? state.player.vx / (Math.hypot(state.player.vx, state.player.vy) || 1) : state.player.lastDirX;
+    state.player.lastDirY = Math.abs(state.player.vx) + Math.abs(state.player.vy) > 0.01 ? state.player.vy / (Math.hypot(state.player.vx, state.player.vy) || 1) : state.player.lastDirY;
+  } else {
+    const target = getPointerWorldTarget();
+    const dx = target.x - state.player.x;
+    const dy = target.y - state.player.y;
+    const distance = Math.hypot(dx, dy) || 0.0001;
+    const dirX = dx / distance;
+    const dirY = dy / distance;
+    const speedStats = getPlayerSpeedStats();
 
-  const speed = Math.hypot(state.player.vx, state.player.vy);
-  if (speed > speedStats.maxSpeed) {
-    const factor = speedStats.maxSpeed / speed;
-    state.player.vx *= factor;
-    state.player.vy *= factor;
+    state.player.lastDirX = dirX;
+    state.player.lastDirY = dirY;
+    state.player.vx += dx * speedStats.seekStrength * dt * 60;
+    state.player.vy += dy * speedStats.seekStrength * dt * 60;
+    state.player.vx *= CONFIG.playerDrag;
+    state.player.vy *= CONFIG.playerDrag;
+
+    const speed = Math.hypot(state.player.vx, state.player.vy);
+    if (speed > speedStats.maxSpeed) {
+      const factor = speedStats.maxSpeed / speed;
+      state.player.vx *= factor;
+      state.player.vy *= factor;
+    }
+
+    state.player.x += state.player.vx;
+    state.player.y += state.player.vy;
+    resolveEntityAgainstBuildings(state.player, state.player.radius);
+    resolveEntityAgainstCIAWormHoles(state.player, state.player.radius);
   }
 
-  state.player.x += state.player.vx;
-  state.player.y += state.player.vy;
-  state.player.radius = CONFIG.playerRadiusBase + Math.min(26, Math.sqrt(state.player.followers.length) * CONFIG.playerRadiusGrowth);
-  resolveEntityAgainstBuildings(state.player, state.player.radius);
-  resolveEntityAgainstCIAWormHoles(state.player, state.player.radius);
   state.player.morphName = getMorphProfile();
   leaveBloodTrail(dt);
   const nodeRadius = getNodeRadius();
@@ -5999,6 +6053,8 @@ function resetGame() {
   state.player.morphName = "seed";
   state.player.slimeTimer = 0;
   state.player.bloodTimer = 0;
+  state.player.heldByBoss = null;
+  state.player.thrownTimer = 0;
   gainBiomass(5, 0, 0);
 
   state.pointer.active = false;
@@ -6696,74 +6752,80 @@ function drawNpc(npc) {
     const faceY = npc.faceY || 0;
     const sideX = -faceY;
     const sideY = faceX;
+    const scale = npc.radius / 34;
     const bodyY = screen.y - (npc.altitude || 0) * 0.18;
     const swing = Math.sin(npc.armSwing) * 0.55;
-    const leftShoulderX = screen.x - sideX * 20;
-    const leftShoulderY = bodyY - sideY * 20 - 14;
-    const rightShoulderX = screen.x + sideX * 20;
-    const rightShoulderY = bodyY + sideY * 20 - 14;
-    const leftHandX = leftShoulderX - sideX * (74 + swing * 18) + faceX * 34;
-    const leftHandY = leftShoulderY - sideY * (74 + swing * 18) + faceY * 34;
-    const rightHandX = rightShoulderX + sideX * (74 - swing * 18) + faceX * 34;
-    const rightHandY = rightShoulderY + sideY * (74 - swing * 18) + faceY * 34;
+    const leftShoulderX = screen.x - sideX * 20 * scale;
+    const leftShoulderY = bodyY - sideY * 20 * scale - 14 * scale;
+    const rightShoulderX = screen.x + sideX * 20 * scale;
+    const rightShoulderY = bodyY + sideY * 20 * scale - 14 * scale;
+    const leftHandX = leftShoulderX - sideX * (110 * scale + swing * 26 * scale) + faceX * 56 * scale;
+    const leftHandY = leftShoulderY - sideY * (110 * scale + swing * 26 * scale) + faceY * 56 * scale;
+    const rightHandX = rightShoulderX + sideX * (110 * scale - swing * 26 * scale) + faceX * 56 * scale;
+    const rightHandY = rightShoulderY + sideY * (110 * scale - swing * 26 * scale) + faceY * 56 * scale;
     ctx.fillStyle = "rgba(0, 0, 0, 0.18)";
     ctx.beginPath();
-    ctx.ellipse(screen.x, screen.y + 30, 44, 18, 0, 0, Math.PI * 2);
+    ctx.ellipse(screen.x, screen.y + 54 * scale, 76 * scale, 30 * scale, 0, 0, Math.PI * 2);
     ctx.fill();
     ctx.strokeStyle = "#604029";
-    ctx.lineWidth = 18;
+    ctx.lineWidth = 22 * scale;
     ctx.lineCap = "round";
     ctx.beginPath();
     ctx.moveTo(leftShoulderX, leftShoulderY);
     ctx.lineTo(leftHandX, leftHandY);
     ctx.moveTo(rightShoulderX, rightShoulderY);
     ctx.lineTo(rightHandX, rightHandY);
-    ctx.moveTo(screen.x - 18, bodyY + 26);
-    ctx.lineTo(screen.x - 30, bodyY + 96);
-    ctx.moveTo(screen.x + 18, bodyY + 26);
-    ctx.lineTo(screen.x + 30, bodyY + 96);
+    ctx.moveTo(screen.x - 18 * scale, bodyY + 36 * scale);
+    ctx.lineTo(screen.x - 44 * scale, bodyY + 158 * scale);
+    ctx.moveTo(screen.x + 18 * scale, bodyY + 36 * scale);
+    ctx.lineTo(screen.x + 44 * scale, bodyY + 158 * scale);
     ctx.stroke();
     ctx.fillStyle = "#7a5638";
     ctx.beginPath();
-    ctx.ellipse(screen.x, bodyY + 10, 30, 62, 0, 0, Math.PI * 2);
+    ctx.ellipse(screen.x, bodyY + 18 * scale, 54 * scale, 118 * scale, 0, 0, Math.PI * 2);
     ctx.fill();
     ctx.beginPath();
-    ctx.ellipse(screen.x, bodyY - 28, 20, 18, 0, 0, Math.PI * 2);
+    ctx.ellipse(screen.x, bodyY - 72 * scale, 38 * scale, 30 * scale, 0, 0, Math.PI * 2);
     ctx.fill();
-    ctx.fillStyle = "#3b2618";
+    ctx.fillStyle = "#8d6749";
     ctx.beginPath();
-    ctx.arc(screen.x - 5, bodyY - 32, 2.2, 0, Math.PI * 2);
-    ctx.arc(screen.x + 5, bodyY - 32, 2.2, 0, Math.PI * 2);
+    ctx.ellipse(screen.x, bodyY - 58 * scale, 28 * scale, 18 * scale, 0, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.fillStyle = "#2f241a";
+    ctx.beginPath();
+    ctx.arc(screen.x - 12 * scale, bodyY - 78 * scale, 4.2 * scale, 0, Math.PI * 2);
+    ctx.arc(screen.x + 12 * scale, bodyY - 78 * scale, 4.2 * scale, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.fillStyle = "#21170f";
+    ctx.beginPath();
+    ctx.ellipse(screen.x - 7 * scale, bodyY - 56 * scale, 3.8 * scale, 5.4 * scale, 0, 0, Math.PI * 2);
+    ctx.ellipse(screen.x + 7 * scale, bodyY - 56 * scale, 3.8 * scale, 5.4 * scale, 0, 0, Math.PI * 2);
     ctx.fill();
     if (npc.beamChargeTimer > 0 || npc.beamTimer > 0) {
       ctx.fillStyle = "rgba(255, 138, 92, 0.9)";
       ctx.beginPath();
-      ctx.ellipse(screen.x, bodyY - 18, 10, 8, 0, 0, Math.PI * 2);
+      ctx.ellipse(screen.x, bodyY - 38 * scale, 18 * scale, 14 * scale, 0, 0, Math.PI * 2);
       ctx.fill();
       ctx.fillStyle = "#fff2c8";
       ctx.beginPath();
-      ctx.ellipse(screen.x, bodyY - 18, 5, 4, 0, 0, Math.PI * 2);
+      ctx.ellipse(screen.x, bodyY - 38 * scale, 9 * scale, 7 * scale, 0, 0, Math.PI * 2);
       ctx.fill();
     } else {
       ctx.strokeStyle = "#3f2b1b";
-      ctx.lineWidth = 4;
+      ctx.lineWidth = 5 * scale;
       ctx.beginPath();
-      ctx.moveTo(screen.x - 6, bodyY - 20);
-      ctx.lineTo(screen.x + 6, bodyY - 18);
+      ctx.moveTo(screen.x - 12 * scale, bodyY - 38 * scale);
+      ctx.lineTo(screen.x + 12 * scale, bodyY - 34 * scale);
       ctx.stroke();
     }
     if (npc.heldNpcId) {
       ctx.fillStyle = "#f0d7c8";
       ctx.beginPath();
-      ctx.arc(rightHandX, rightHandY - 10, 5, 0, Math.PI * 2);
+      ctx.arc(rightHandX, rightHandY - 16 * scale, 7 * scale, 0, Math.PI * 2);
       ctx.fill();
       ctx.fillStyle = "#4b4f6a";
-      ctx.fillRect(rightHandX - 4, rightHandY - 5, 8, 13);
+      ctx.fillRect(rightHandX - 6 * scale, rightHandY - 8 * scale, 12 * scale, 18 * scale);
     }
-    ctx.fillStyle = "rgba(255, 255, 255, 0.15)";
-    ctx.fillRect(screen.x - 38, bodyY - 88, 76, 5);
-    ctx.fillStyle = "#ffb086";
-    ctx.fillRect(screen.x - 38, bodyY - 88, 76 * clamp(npc.health / npc.maxHealth, 0, 1), 5);
   } else if (npc.type === "ciaBatEye") {
     ctx.fillStyle = "#f0dfd2";
     ctx.beginPath();
