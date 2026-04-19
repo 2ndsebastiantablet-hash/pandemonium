@@ -99,12 +99,32 @@ const CONFIG = {
   ciaShotCooldown: 0.24,
   ciaBossSpawnConsumed: 84,
   ciaBossSpawnKills: 16,
+  ciaBossConsumedStep: 20,
+  ciaBossKillStep: 8,
   ciaWormUndergroundSpeed: 10.8,
   ciaWormSurfaceSpeed: 12.4,
   ciaWormHoleLifetime: 999999,
   ciaWormBreachRadius: 220,
   ciaWormBodyRadius: 150,
   ciaWormQuakeStrength: 1.2,
+  ciaBatHealth: 245,
+  ciaBatVision: 760,
+  ciaBatSpeed: 3.5,
+  ciaBatNightSpeed: 4.35,
+  ciaBatLaserCooldown: 1.9,
+  ciaBatEyeCooldown: 4.8,
+  ciaBatMeteorCooldown: 7.8,
+  ciaBatMinionCooldown: 10.2,
+  ciaBatSkeletonCooldown: 12.4,
+  ciaBatLaserDamage: 18,
+  ciaBatEyeDamage: 24,
+  ciaBatMeteorDamage: 26,
+  ciaBatMeteorBlastRadius: 102,
+  ciaBatEyeLifetime: 16,
+  ciaBatMinionLifetime: 24,
+  ciaSkeletonRange: 420,
+  ciaSkeletonDamage: 10,
+  ciaSkeletonShotCooldown: 1.8,
   militaryBaseCannonRange: 430,
   militaryBaseMinigunRange: 320,
   militaryBaseCannonCooldown: 2.6,
@@ -197,6 +217,9 @@ const state = {
     militaryBossSpawned: false,
     ciaDeathsTotal: 0,
     ciaBossSpawned: false,
+    ciaMiniBossesSpawned: [],
+    ciaBossConsumedThreshold: CONFIG.ciaBossSpawnConsumed,
+    ciaBossKillThreshold: CONFIG.ciaBossSpawnKills,
     ciaWorm: null,
   },
   camera: {
@@ -249,9 +272,12 @@ const SANDBOX_ENEMY_OPTIONS = [
   { id: "helicopter", label: "Helicopter" },
   { id: "ciaSquad", label: "CIA Squad" },
   { id: "ciaBoss", label: "CIA Worm" },
+  { id: "ciaBatBoss", label: "CIA Bat" },
   { id: "alien", label: "Alien Ship" },
   { id: "alienWing", label: "Alien Wing" },
 ];
+
+const CIA_MINI_BOSS_IDS = ["worm", "bat"];
 
 function clamp(value, min, max) {
   return Math.min(Math.max(value, min), max);
@@ -1478,14 +1504,37 @@ function hasMilitaryBoss() {
   return state.world.npcs.some((npc) => npc.type === "militaryBoss" && npc.alive);
 }
 
-function shouldSpawnCIABoss() {
-  if (state.world.ciaBossSpawned) {
+function shouldSpawnNextCIAMiniBoss() {
+  if (state.world.ciaMiniBossesSpawned.length >= CIA_MINI_BOSS_IDS.length) {
     return false;
   }
   return (
-    state.player.absorbedHumans >= CONFIG.ciaBossSpawnConsumed ||
-    state.world.ciaDeathsTotal >= CONFIG.ciaBossSpawnKills
+    state.player.absorbedHumans >= state.world.ciaBossConsumedThreshold ||
+    state.world.ciaDeathsTotal >= state.world.ciaBossKillThreshold
   );
+}
+
+function getRemainingCIAMiniBossIds() {
+  return CIA_MINI_BOSS_IDS.filter((id) => !state.world.ciaMiniBossesSpawned.includes(id));
+}
+
+function chooseNextCIAMiniBossId() {
+  const remaining = getRemainingCIAMiniBossIds();
+  if (!remaining.length) {
+    return null;
+  }
+  const rng = mulberry32(hash2d(state.world.nextNpcId * 13, Math.floor(state.time * 10) + state.player.absorbedHumans * 17));
+  return remaining[randomInt(rng, 0, remaining.length - 1)];
+}
+
+function registerCIAMiniBossSpawn(id) {
+  if (!state.world.ciaMiniBossesSpawned.includes(id)) {
+    state.world.ciaMiniBossesSpawned.push(id);
+    const stage = state.world.ciaMiniBossesSpawned.length;
+    state.world.ciaBossConsumedThreshold = CONFIG.ciaBossSpawnConsumed + stage * CONFIG.ciaBossConsumedStep;
+    state.world.ciaBossKillThreshold = CONFIG.ciaBossSpawnKills + stage * CONFIG.ciaBossKillStep;
+    state.world.ciaBossSpawned = stage >= CIA_MINI_BOSS_IDS.length;
+  }
 }
 
 function createCIAWormState() {
@@ -1513,6 +1562,105 @@ function createCIAWormState() {
     visible: false,
     chompPhase: 0,
     emergeApplied: false,
+  };
+}
+
+function createCIABatBossNpc(spawnPoint, rng) {
+  return {
+    id: state.world.nextNpcId,
+    type: "ciaBatBoss",
+    x: spawnPoint.x,
+    y: spawnPoint.y,
+    vx: 0,
+    vy: 0,
+    radius: 24,
+    homeChunkKey: spawnPoint.chunkKey,
+    targetX: spawnPoint.x,
+    targetY: spawnPoint.y,
+    timer: randomBetween(rng, 2.8, 4.4),
+    lastSeenTimer: 0,
+    faceX: 1,
+    faceY: 0,
+    alive: true,
+    altitude: 120 + rng() * 18,
+    health: CONFIG.ciaBatHealth,
+    maxHealth: CONFIG.ciaBatHealth,
+    laserCooldown: randomBetween(rng, 0.8, 1.6),
+    eyeCooldown: randomBetween(rng, 1.6, 3.4),
+    meteorCooldown: randomBetween(rng, 2.8, 4.5),
+    minionCooldown: randomBetween(rng, 4.2, 6.4),
+    skeletonCooldown: randomBetween(rng, 5.1, 7.6),
+    contactCooldown: 0,
+    wingOffset: randomBetween(rng, 0, Math.PI * 2),
+    retreatBias: rng() > 0.5 ? 1 : -1,
+    title: "The Hollow Bat",
+  };
+}
+
+function createCIABatEyeNpc(spawnPoint, rng, ownerId) {
+  const angle = randomBetween(rng, 0, Math.PI * 2);
+  const speed = randomBetween(rng, 4.8, 6.6);
+  return {
+    id: state.world.nextNpcId,
+    type: "ciaBatEye",
+    x: spawnPoint.x,
+    y: spawnPoint.y,
+    vx: Math.cos(angle) * speed,
+    vy: Math.sin(angle) * speed,
+    radius: 16,
+    homeChunkKey: spawnPoint.chunkKey,
+    timer: CONFIG.ciaBatEyeLifetime,
+    faceX: Math.cos(angle),
+    faceY: Math.sin(angle),
+    ownerId,
+    alive: true,
+    damageCooldown: 0,
+    structureCooldown: 0,
+  };
+}
+
+function createCIAMiniBatNpc(spawnPoint, rng) {
+  return {
+    id: state.world.nextNpcId,
+    type: "ciaMiniBat",
+    x: spawnPoint.x,
+    y: spawnPoint.y,
+    vx: 0,
+    vy: 0,
+    radius: 8,
+    homeChunkKey: spawnPoint.chunkKey,
+    targetX: spawnPoint.x,
+    targetY: spawnPoint.y,
+    timer: randomBetween(rng, 1.4, 2.8),
+    lastSeenTimer: 0,
+    faceX: 1,
+    faceY: 0,
+    alive: true,
+    altitude: 74 + rng() * 18,
+    life: CONFIG.ciaBatMinionLifetime,
+    contactCooldown: 0,
+    wingOffset: randomBetween(rng, 0, Math.PI * 2),
+  };
+}
+
+function createCIASkeletonNpc(spawnPoint, rng) {
+  return {
+    id: state.world.nextNpcId,
+    type: "ciaSkeleton",
+    x: spawnPoint.x,
+    y: spawnPoint.y,
+    vx: 0,
+    vy: 0,
+    radius: 9,
+    homeChunkKey: spawnPoint.chunkKey,
+    targetX: state.player.x,
+    targetY: state.player.y,
+    timer: randomBetween(rng, 1.4, 2.6),
+    lastSeenTimer: 0,
+    shootCooldown: randomBetween(rng, 0.4, 1.2),
+    faceX: 1,
+    faceY: 0,
+    alive: true,
   };
 }
 
@@ -1754,6 +1902,59 @@ function spawnCIASquadAt(x, y) {
   }
 }
 
+function chooseCIABossSpawnPoint(minDistance = 260) {
+  const rng = mulberry32(hash2d(state.world.nextNpcId * 23, Math.floor(state.time * 14) + state.player.absorbedHumans * 19));
+  const ciaSpawns = getLoadedCIASpawns().filter((spawn) => distanceBetween(spawn.x, spawn.y, state.player.x, state.player.y) > minDistance);
+  const walkSpawns = getLoadedWalkSpawns(minDistance);
+  const roadSpawns = getLoadedRoadSpawns(minDistance);
+  const sourcePool = ciaSpawns.length ? ciaSpawns : walkSpawns.length ? walkSpawns : roadSpawns;
+  if (!sourcePool.length) {
+    return null;
+  }
+  return sourcePool[randomInt(rng, 0, sourcePool.length - 1)];
+}
+
+function spawnCIABatBossAt(x, y) {
+  const chunk = getOrCreateChunkForPosition(x, y);
+  if (!chunk) {
+    return false;
+  }
+  const spawnPoint = { x, y, chunkKey: chunk.key };
+  const rng = mulberry32(hash2d(Math.floor(x) * 29 + state.world.nextNpcId, Math.floor(y) * 31 - state.world.nextNpcId));
+  state.world.npcs.push(createCIABatBossNpc(spawnPoint, rng));
+  state.world.nextNpcId += 1;
+  state.world.alert = clamp(state.world.alert + 28, 0, 100);
+  registerCIAMiniBossSpawn("bat");
+  return true;
+}
+
+function spawnCIABatBoss() {
+  const spawnPoint = chooseCIABossSpawnPoint(360);
+  if (!spawnPoint) {
+    return false;
+  }
+  return spawnCIABatBossAt(spawnPoint.x, spawnPoint.y);
+}
+
+function spawnNextCIAMiniBoss() {
+  const nextId = chooseNextCIAMiniBossId();
+  if (!nextId) {
+    return false;
+  }
+  const spawnPoint = chooseCIABossSpawnPoint(320);
+  if (!spawnPoint) {
+    return false;
+  }
+  if (nextId === "worm") {
+    triggerCIAWormSummon(spawnPoint.x, spawnPoint.y);
+    return true;
+  }
+  if (nextId === "bat") {
+    return spawnCIABatBossAt(spawnPoint.x, spawnPoint.y);
+  }
+  return false;
+}
+
 function spawnSandboxEnemy(id, x, y) {
   const chunk = getOrCreateChunkForPosition(x, y);
   if (!chunk) {
@@ -1793,6 +1994,11 @@ function spawnSandboxEnemy(id, x, y) {
 
   if (id === "ciaBoss") {
     triggerCIAWormSummon(x, y, { immediate: true });
+    return;
+  }
+
+  if (id === "ciaBatBoss") {
+    spawnCIABatBossAt(x, y);
     return;
   }
 
@@ -2015,7 +2221,7 @@ function triggerCIAWormSummon(x, y, options = {}) {
   worm.quakeEventTimer = options.immediate ? 3.5 : 2.4;
   worm.chompPhase = 0;
   worm.emergeApplied = false;
-  state.world.ciaBossSpawned = true;
+  registerCIAMiniBossSpawn("worm");
 
   if (options.immediate) {
     worm.active = true;
@@ -2644,18 +2850,28 @@ function absorbNpc(npc) {
   if (npc.type === "cia") {
     state.world.ciaDeathsTotal += 1;
   }
+  if (npc.type === "ciaBatBoss") {
+    state.world.ciaDeathsTotal += 6;
+  }
+  if (npc.type === "ciaSkeleton") {
+    state.world.ciaDeathsTotal += 1;
+  }
   npc.alive = false;
   state.player.absorbedHumans += 1;
   const biomass =
     npc.type === "militaryBoss" ? CONFIG.biomatterPerHuman + 12 :
+    npc.type === "ciaBatBoss" ? CONFIG.biomatterPerHuman + 14 :
     npc.type === "tank" ? CONFIG.biomatterPerHuman + 4 :
     npc.type === "helicopter" ? CONFIG.biomatterPerHuman + 3 :
+    npc.type === "ciaBatEye" ? Math.max(1, CONFIG.biomatterPerHuman - 1) :
+    npc.type === "ciaMiniBat" ? CONFIG.biomatterPerHuman + 1 :
     npc.type === "policeBoss" ? CONFIG.biomatterPerHuman + 6 :
     npc.type === "police" || npc.type === "militarySoldier" || npc.type === "militaryGrenadier" ? CONFIG.biomatterPerHuman + 1 :
     CONFIG.biomatterPerHuman;
   gainBiomass(biomass, npc.x, npc.y);
   const alertGain =
     npc.type === "militaryBoss" ? 48 :
+    npc.type === "ciaBatBoss" ? 42 :
     npc.type === "policeBoss" ? 34 :
     npc.type === "police" ? 18 :
     npc.type === "militarySoldier" || npc.type === "militaryGrenadier" ? 22 :
@@ -2838,6 +3054,86 @@ function shootShotgunPlayer(npc) {
 
   if (hits > 0) {
     damagePlayer(CONFIG.policeBossPelletDamage * hits, npc.x, npc.y, 1.4);
+  }
+}
+
+function chooseCIABatTarget(npc) {
+  const rng = mulberry32(hash2d(npc.id * 47, Math.floor(state.time * 9) + state.world.nextNpcId));
+  const anchor = getLoadedCIASpawns().filter((spawn) => distanceBetween(spawn.x, spawn.y, state.player.x, state.player.y) > 220);
+  if (anchor.length && rng() > 0.45) {
+    const point = anchor[randomInt(rng, 0, anchor.length - 1)];
+    return {
+      x: point.x + randomBetween(rng, -160, 160),
+      y: point.y + randomBetween(rng, -160, 160),
+    };
+  }
+  const angle = rng() * Math.PI * 2;
+  const distance = randomBetween(rng, 300, 920);
+  return {
+    x: state.player.x + Math.cos(angle) * distance,
+    y: state.player.y + Math.sin(angle) * distance,
+  };
+}
+
+function launchCIABatMeteor(npc, targetX, targetY) {
+  const dx = targetX - npc.x;
+  const dy = targetY - npc.y;
+  const distance = Math.hypot(dx, dy) || 0.0001;
+  state.world.projectiles.push({
+    kind: "batMeteor",
+    x: targetX + (Math.random() - 0.5) * 42,
+    y: targetY - 420 - Math.random() * 120,
+    vx: (dx / distance) * 0.35 + (Math.random() - 0.5) * 0.18,
+    vy: 6.8 + Math.random() * 1.1,
+    life: 1.65,
+    radius: 10 + Math.random() * 4,
+    blastRadius: CONFIG.ciaBatMeteorBlastRadius,
+    damage: CONFIG.ciaBatMeteorDamage,
+    color: "#ff8b63",
+    ownerType: npc.type,
+  });
+}
+
+function spawnCIABatMinions(npc, count) {
+  const rng = mulberry32(hash2d(npc.id * 53, Math.floor(state.time * 15) + state.world.nextNpcId));
+  for (let index = 0; index < count; index += 1) {
+    const angle = (Math.PI * 2 * index) / Math.max(1, count) + rng() * 0.55;
+    const distance = randomBetween(rng, 26, 48);
+    const spawnPoint = {
+      x: npc.x + Math.cos(angle) * distance,
+      y: npc.y + Math.sin(angle) * distance,
+      chunkKey: npc.homeChunkKey,
+    };
+    state.world.npcs.push(createCIAMiniBatNpc(spawnPoint, rng));
+    state.world.nextNpcId += 1;
+  }
+}
+
+function spawnCIASkeletonWave(npc, count) {
+  const rng = mulberry32(hash2d(npc.id * 59, Math.floor(state.time * 12) + state.world.nextNpcId));
+  for (let index = 0; index < count; index += 1) {
+    const angle = rng() * Math.PI * 2;
+    const distance = randomBetween(rng, 120, 210);
+    const x = npc.x + Math.cos(angle) * distance;
+    const y = npc.y + Math.sin(angle) * distance;
+    const chunk = getOrCreateChunkForPosition(x, y);
+    if (!chunk) {
+      continue;
+    }
+    state.world.npcs.push(createCIASkeletonNpc({ x, y, chunkKey: chunk.key }, rng));
+    state.world.nextNpcId += 1;
+  }
+}
+
+function damageCIABatBoss(npc, amount, sourceX, sourceY) {
+  npc.health = clamp(npc.health - amount, 0, npc.maxHealth);
+  const dx = npc.x - sourceX;
+  const dy = npc.y - sourceY;
+  const distance = Math.hypot(dx, dy) || 0.0001;
+  npc.vx += (dx / distance) * 0.5;
+  npc.vy += (dy / distance) * 0.5;
+  if (npc.health <= 0) {
+    absorbNpc(npc);
   }
 }
 
@@ -3743,6 +4039,286 @@ function updateAlien(npc, dt) {
   }
 }
 
+function updateCIABatEye(npc, dt) {
+  npc.timer -= dt;
+  npc.damageCooldown = Math.max(0, npc.damageCooldown - dt);
+  npc.structureCooldown = Math.max(0, npc.structureCooldown - dt);
+  npc.x += npc.vx;
+  npc.y += npc.vy;
+  npc.vx *= 0.992;
+  npc.vy *= 0.992;
+  const speed = Math.hypot(npc.vx, npc.vy);
+  if (speed > 0.02) {
+    npc.faceX = npc.vx / speed;
+    npc.faceY = npc.vy / speed;
+  }
+
+  if (npc.damageCooldown <= 0 && distanceBetween(npc.x, npc.y, state.player.x, state.player.y) <= npc.radius + state.player.radius) {
+    damagePlayer(CONFIG.ciaBatEyeDamage, npc.x, npc.y, 2.1);
+    shedPlayerBiomass(2 + Math.floor(state.player.followers.length * 0.02), npc.x, npc.y);
+    npc.damageCooldown = 0.55;
+    npc.vx *= -0.65;
+    npc.vy *= -0.65;
+  }
+
+  if (npc.structureCooldown <= 0) {
+    for (const building of getLoadedBuildings()) {
+      if (!circleIntersectsRect(npc.x, npc.y, npc.radius + 4, building)) {
+        continue;
+      }
+      applyDamageToBuilding(building, 26, npc.faceX || 1, npc.faceY || 0);
+      npc.vx *= -0.8;
+      npc.vy *= -0.8;
+      npc.structureCooldown = 0.16;
+      break;
+    }
+    if (npc.structureCooldown <= 0) {
+      for (const chunk of state.world.chunks.values()) {
+        for (const deco of chunk.decor) {
+          if (deco.destroyed || !wormCircleHitsDecor(npc.x, npc.y, npc.radius + 6, deco)) {
+            continue;
+          }
+          applyDamageToDecor(deco, 24, npc.faceX || 1, npc.faceY || 0);
+          npc.vx *= -0.78;
+          npc.vy *= -0.78;
+          npc.structureCooldown = 0.16;
+          break;
+        }
+        if (npc.structureCooldown > 0) {
+          break;
+        }
+      }
+    }
+  }
+
+  if (npc.timer <= 0) {
+    npc.alive = false;
+  }
+}
+
+function updateCIAMiniBat(npc, dt) {
+  npc.life -= dt;
+  npc.contactCooldown = Math.max(0, npc.contactCooldown - dt);
+  if (npc.life <= 0) {
+    npc.alive = false;
+    return;
+  }
+
+  if (canReachFlyingEnemy(npc)) {
+    absorbNpc(npc);
+    return;
+  }
+
+  const playerDistance = distanceBetween(npc.x, npc.y, state.player.x, state.player.y);
+  const seen = playerDistance < 520;
+  if (seen) {
+    npc.lastSeenTimer = 4.5;
+    npc.targetX = state.player.x;
+    npc.targetY = state.player.y;
+  } else {
+    npc.lastSeenTimer = Math.max(0, npc.lastSeenTimer - dt);
+  }
+
+  if (npc.timer <= 0 || distanceBetween(npc.x, npc.y, npc.targetX, npc.targetY) < 30) {
+    const target = chooseCIABatTarget(npc);
+    npc.targetX = target.x;
+    npc.targetY = target.y;
+    npc.timer = 1.8 + Math.random() * 1.8;
+  } else {
+    npc.timer -= dt;
+  }
+
+  const dx = npc.targetX - npc.x;
+  const dy = npc.targetY - npc.y;
+  const distance = Math.hypot(dx, dy) || 0.0001;
+  npc.vx += (dx / distance) * 0.16 * dt * 60;
+  npc.vy += (dy / distance) * 0.16 * dt * 60;
+  npc.vx *= 0.94;
+  npc.vy *= 0.94;
+  const speed = Math.hypot(npc.vx, npc.vy);
+  if (speed > 3.6) {
+    const factor = 3.6 / speed;
+    npc.vx *= factor;
+    npc.vy *= factor;
+  }
+  if (speed > 0.02) {
+    npc.faceX = npc.vx / speed;
+    npc.faceY = npc.vy / speed;
+  }
+  npc.altitude = lerp(npc.altitude || 78, seen ? 88 : 70, 0.04);
+  npc.x += npc.vx;
+  npc.y += npc.vy;
+
+  if (npc.contactCooldown <= 0 && playerDistance <= npc.radius + state.player.radius + 6) {
+    damagePlayer(9, npc.x, npc.y, 1.3);
+    npc.contactCooldown = 0.7;
+  }
+}
+
+function updateCIASkeleton(npc, dt) {
+  const seesPlayer = canSeePlayer(npc, CONFIG.ciaVision * 0.9);
+  const distance = distanceBetween(npc.x, npc.y, state.player.x, state.player.y);
+
+  if (distance < getPlayerAbsorbRadius() + npc.radius) {
+    absorbNpc(npc);
+    return;
+  }
+
+  if (seesPlayer) {
+    npc.lastSeenTimer = 6;
+    npc.targetX = state.player.x;
+    npc.targetY = state.player.y;
+  } else {
+    npc.lastSeenTimer = Math.max(0, npc.lastSeenTimer - dt);
+  }
+
+  npc.shootCooldown -= dt;
+  if (seesPlayer && distance <= CONFIG.ciaSkeletonRange && npc.shootCooldown <= 0) {
+    shootPlayer(npc, {
+      damage: CONFIG.ciaSkeletonDamage,
+      color: "rgba(214, 192, 142, 1)",
+      width: 1.4,
+      life: 0.16,
+      push: 0.34,
+      muzzleDistance: 12,
+      jitter: 0.02,
+    });
+    npc.shootCooldown = CONFIG.ciaSkeletonShotCooldown;
+  }
+
+  if (seesPlayer || npc.lastSeenTimer > 0) {
+    const desiredRange = 250;
+    if (distance < desiredRange) {
+      const dx = npc.x - state.player.x;
+      const dy = npc.y - state.player.y;
+      const length = Math.hypot(dx, dy) || 0.0001;
+      steerEntity(npc, npc.x + (dx / length) * 160, npc.y + (dy / length) * 160, 0.07, 2.2, dt);
+    } else {
+      steerEntity(npc, state.player.x, state.player.y, 0.045, 1.9, dt);
+    }
+  } else {
+    npc.timer -= dt;
+    if (npc.timer <= 0 || distanceBetween(npc.x, npc.y, npc.targetX, npc.targetY) < 18) {
+      const target = chooseNearbyWalkTarget(npc);
+      npc.targetX = target.x;
+      npc.targetY = target.y;
+      npc.timer = 1.8 + Math.random() * 1.6;
+    }
+    steerEntity(npc, npc.targetX, npc.targetY, 0.03, 1.6, dt);
+  }
+}
+
+function updateCIABatBoss(npc, dt) {
+  const dayNight = getDayNightState();
+  const nightBuff = dayNight.darkness >= 0.6;
+  const seesPlayer = canSeePlayer(npc, CONFIG.ciaBatVision, true);
+  const distance = distanceBetween(npc.x, npc.y, state.player.x, state.player.y);
+
+  npc.laserCooldown -= dt;
+  npc.eyeCooldown -= dt;
+  npc.meteorCooldown -= dt;
+  npc.minionCooldown -= dt;
+  npc.skeletonCooldown -= dt;
+  npc.contactCooldown = Math.max(0, npc.contactCooldown - dt);
+
+  if (canReachFlyingEnemy(npc)) {
+    if (npc.contactCooldown <= 0) {
+      damageCIABatBoss(npc, 22, state.player.x, state.player.y);
+      npc.contactCooldown = 0.38;
+    }
+    if (!npc.alive) {
+      return;
+    }
+  }
+
+  if (seesPlayer) {
+    npc.lastSeenTimer = 8;
+    const orbit = nightBuff ? 180 : 240;
+    const angle = state.time * (nightBuff ? 1.35 : 0.9) * npc.retreatBias + npc.id * 0.17;
+    npc.targetX = state.player.x + Math.cos(angle) * orbit;
+    npc.targetY = state.player.y + Math.sin(angle) * orbit * 0.7 - 60;
+    state.world.alert = clamp(state.world.alert + (nightBuff ? 18 : 12) * dt, 0, 100);
+  } else {
+    npc.lastSeenTimer = Math.max(0, npc.lastSeenTimer - dt);
+    npc.timer -= dt;
+    if (npc.timer <= 0 || distanceBetween(npc.x, npc.y, npc.targetX, npc.targetY) < 40) {
+      const target = chooseCIABatTarget(npc);
+      npc.targetX = target.x;
+      npc.targetY = target.y;
+      npc.timer = 3 + Math.random() * 3.4;
+    }
+  }
+
+  const dx = npc.targetX - npc.x;
+  const dy = npc.targetY - npc.y;
+  const targetDistance = Math.hypot(dx, dy) || 0.0001;
+  npc.vx += (dx / targetDistance) * 0.11 * dt * 60;
+  npc.vy += (dy / targetDistance) * 0.11 * dt * 60;
+  npc.vx *= nightBuff ? 0.95 : 0.94;
+  npc.vy *= nightBuff ? 0.95 : 0.94;
+  const speed = Math.hypot(npc.vx, npc.vy);
+  const speedLimit = nightBuff ? CONFIG.ciaBatNightSpeed : CONFIG.ciaBatSpeed;
+  if (speed > speedLimit) {
+    const factor = speedLimit / speed;
+    npc.vx *= factor;
+    npc.vy *= factor;
+  }
+  if (speed > 0.02) {
+    npc.faceX = npc.vx / speed;
+    npc.faceY = npc.vy / speed;
+  }
+  npc.altitude = lerp(npc.altitude || 120, nightBuff ? 148 : 118, 0.025);
+  npc.x += npc.vx;
+  npc.y += npc.vy;
+
+  if (seesPlayer && distance <= CONFIG.ciaBatVision && npc.laserCooldown <= 0) {
+    shootPlayer(npc, {
+      damage: CONFIG.ciaBatLaserDamage * (nightBuff ? 1.25 : 1),
+      color: "rgba(255, 86, 86, 1)",
+      width: nightBuff ? 4.8 : 3.6,
+      life: 0.18,
+      push: 0.9,
+      muzzleDistance: 10,
+      jitter: nightBuff ? 0.025 : 0.012,
+      ignoreLOS: true,
+    });
+    npc.laserCooldown = CONFIG.ciaBatLaserCooldown * (nightBuff ? 0.72 : 1);
+  }
+
+  if (seesPlayer && distance <= 360 && npc.eyeCooldown <= 0) {
+    const rng = mulberry32(hash2d(npc.id * 61, Math.floor(state.time * 18) + state.world.nextNpcId));
+    const chunk = getOrCreateChunkForPosition(npc.x, npc.y);
+    if (chunk) {
+      const eyeCount = nightBuff ? 2 : 1;
+      for (let index = 0; index < eyeCount; index += 1) {
+        state.world.npcs.push(createCIABatEyeNpc({ x: npc.x, y: npc.y, chunkKey: chunk.key }, rng, npc.id));
+        state.world.nextNpcId += 1;
+      }
+    }
+    npc.eyeCooldown = CONFIG.ciaBatEyeCooldown * (nightBuff ? 0.7 : 1);
+  }
+
+  if (nightBuff && npc.meteorCooldown <= 0) {
+    const volley = 2 + Math.floor(Math.random() * 2);
+    for (let index = 0; index < volley; index += 1) {
+      const angle = Math.random() * Math.PI * 2;
+      const radius = 40 + Math.random() * 180;
+      launchCIABatMeteor(npc, state.player.x + Math.cos(angle) * radius, state.player.y + Math.sin(angle) * radius);
+    }
+    npc.meteorCooldown = CONFIG.ciaBatMeteorCooldown;
+  }
+
+  if (nightBuff && npc.minionCooldown <= 0) {
+    spawnCIABatMinions(npc, 2 + Math.floor(Math.random() * 2));
+    npc.minionCooldown = CONFIG.ciaBatMinionCooldown;
+  }
+
+  if (nightBuff && npc.skeletonCooldown <= 0) {
+    spawnCIASkeletonWave(npc, 2 + Math.floor(Math.random() * 2));
+    npc.skeletonCooldown = CONFIG.ciaBatSkeletonCooldown;
+  }
+}
+
 function updateCIA(npc, dt) {
   const squad = getSquadMates("cia", npc.squadId);
   if (squad.length < 2) {
@@ -4497,6 +5073,14 @@ function updateNpcs(dt) {
       updateMilitaryBoss(npc, dt);
     } else if (npc.type === "tank") {
       updateTank(npc, dt);
+    } else if (npc.type === "ciaBatBoss") {
+      updateCIABatBoss(npc, dt);
+    } else if (npc.type === "ciaBatEye") {
+      updateCIABatEye(npc, dt);
+    } else if (npc.type === "ciaMiniBat") {
+      updateCIAMiniBat(npc, dt);
+    } else if (npc.type === "ciaSkeleton") {
+      updateCIASkeleton(npc, dt);
     } else if (npc.type === "cia") {
       updateCIA(npc, dt);
     } else if (npc.type === "alien") {
@@ -4869,13 +5453,8 @@ function updateGame(dt) {
     return;
   }
   ensureChunksAroundPlayer();
-  if (state.gameMode !== "sandbox" && shouldSpawnCIABoss()) {
-    const angle = Math.random() * Math.PI * 2;
-    const distance = 180 + Math.random() * 220;
-    triggerCIAWormSummon(
-      state.player.x + Math.cos(angle) * distance,
-      state.player.y + Math.sin(angle) * distance,
-    );
+  if (state.gameMode !== "sandbox" && shouldSpawnNextCIAMiniBoss()) {
+    spawnNextCIAMiniBoss();
   }
   if (state.world.ciaWorm?.cutscene) {
     updateCIAWorm(dt);
@@ -4921,6 +5500,9 @@ function resetGame() {
   state.world.militaryBossSpawned = false;
   state.world.ciaDeathsTotal = 0;
   state.world.ciaBossSpawned = false;
+  state.world.ciaMiniBossesSpawned = [];
+  state.world.ciaBossConsumedThreshold = CONFIG.ciaBossSpawnConsumed;
+  state.world.ciaBossKillThreshold = CONFIG.ciaBossSpawnKills;
   state.world.ciaWorm = createCIAWormState();
   state.time = 0;
   state.lastTime = 0;
@@ -4979,7 +5561,13 @@ function updateHud() {
     countNpcsByType("militaryBoss") +
     countNpcsByType("tank") +
     countNpcsByType("helicopter");
-  const ciaCount = countNpcsByType("cia") + (state.world.ciaWorm?.active || state.world.ciaWorm?.cutscene ? 1 : 0);
+  const ciaCount =
+    countNpcsByType("cia") +
+    countNpcsByType("ciaBatBoss") +
+    countNpcsByType("ciaSkeleton") +
+    countNpcsByType("ciaMiniBat") +
+    countNpcsByType("ciaBatEye") +
+    (state.world.ciaWorm?.active || state.world.ciaWorm?.cutscene ? 1 : 0);
   const alienCount = countNpcsByType("alien");
   const dayNight = getDayNightState();
   particleCountLabel.textContent = `Health ${Math.round(state.player.health)}/${Math.round(state.player.maxHealth)} | Alert ${Math.round(state.world.alert)} | ${dayNight.label} | Consumed ${state.player.absorbedHumans} | Police ${countNpcsByType("police")} | Military ${militaryCount} | CIA ${ciaCount} | Aliens ${alienCount} | Morph ${state.player.morphName}`;
@@ -5583,6 +6171,121 @@ function drawNpc(npc) {
     ctx.stroke();
     ctx.fillStyle = "#111214";
     ctx.fillRect(handX + faceX * 6 - 2, handY + faceY * 6 - 2, 6, 4);
+  } else if (npc.type === "ciaBatBoss") {
+    const altitude = npc.altitude || 120;
+    const shadowY = screen.y + altitude * 0.14;
+    const bodyY = screen.y - altitude * 0.38;
+    const flap = Math.sin(state.time * 7 + npc.wingOffset) * 18;
+    ctx.fillStyle = "rgba(0, 0, 0, 0.22)";
+    ctx.beginPath();
+    ctx.ellipse(screen.x, shadowY, 44, 16, 0, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.fillStyle = "#5f3c4d";
+    ctx.beginPath();
+    ctx.moveTo(screen.x, bodyY - 10);
+    ctx.bezierCurveTo(screen.x - 32, bodyY - 28, screen.x - 92, bodyY - 26 - flap, screen.x - 128, bodyY + 6);
+    ctx.bezierCurveTo(screen.x - 86, bodyY + 12, screen.x - 38, bodyY + 4, screen.x - 10, bodyY + 10);
+    ctx.closePath();
+    ctx.fill();
+    ctx.beginPath();
+    ctx.moveTo(screen.x, bodyY - 10);
+    ctx.bezierCurveTo(screen.x + 32, bodyY - 28, screen.x + 92, bodyY - 26 + flap, screen.x + 128, bodyY + 6);
+    ctx.bezierCurveTo(screen.x + 86, bodyY + 12, screen.x + 38, bodyY + 4, screen.x + 10, bodyY + 10);
+    ctx.closePath();
+    ctx.fill();
+    ctx.fillStyle = "#8f6670";
+    ctx.beginPath();
+    ctx.ellipse(screen.x, bodyY + 8, 22, 46, 0, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.fillStyle = "#4d313b";
+    ctx.fillRect(screen.x - 7, bodyY + 34, 4, 18);
+    ctx.fillRect(screen.x + 3, bodyY + 34, 4, 18);
+    ctx.fillStyle = "#7f5c67";
+    ctx.beginPath();
+    ctx.ellipse(screen.x + 26, bodyY - 18, 20, 16, 0, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.fillStyle = "#f6dfd8";
+    ctx.beginPath();
+    ctx.arc(screen.x + 31, bodyY - 19, 9, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.fillStyle = "#9c2131";
+    ctx.beginPath();
+    ctx.arc(screen.x + 31, bodyY - 19, 4.4, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.fillStyle = "rgba(255, 255, 255, 0.15)";
+    ctx.fillRect(screen.x - 34, bodyY - 66, 68, 5);
+    ctx.fillStyle = "#ff9c79";
+    ctx.fillRect(screen.x - 34, bodyY - 66, 68 * clamp(npc.health / npc.maxHealth, 0, 1), 5);
+  } else if (npc.type === "ciaBatEye") {
+    ctx.fillStyle = "#f0dfd2";
+    ctx.beginPath();
+    ctx.arc(screen.x, screen.y, npc.radius, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.fillStyle = "#b32432";
+    ctx.beginPath();
+    ctx.arc(screen.x + (npc.faceX || 0) * 3, screen.y + (npc.faceY || 0) * 3, npc.radius * 0.46, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.fillStyle = "#1a0d10";
+    ctx.beginPath();
+    ctx.arc(screen.x + (npc.faceX || 0) * 5, screen.y + (npc.faceY || 0) * 5, npc.radius * 0.22, 0, Math.PI * 2);
+    ctx.fill();
+  } else if (npc.type === "ciaMiniBat") {
+    const altitude = npc.altitude || 80;
+    const shadowY = screen.y + altitude * 0.16;
+    const bodyY = screen.y - altitude * 0.34;
+    const flap = Math.sin(state.time * 9 + npc.wingOffset) * 7;
+    ctx.fillStyle = "rgba(0, 0, 0, 0.18)";
+    ctx.beginPath();
+    ctx.ellipse(screen.x, shadowY, 12, 5, 0, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.fillStyle = "#4b3039";
+    ctx.beginPath();
+    ctx.moveTo(screen.x, bodyY);
+    ctx.lineTo(screen.x - 16, bodyY - 6 - flap);
+    ctx.lineTo(screen.x - 10, bodyY + 6);
+    ctx.closePath();
+    ctx.fill();
+    ctx.beginPath();
+    ctx.moveTo(screen.x, bodyY);
+    ctx.lineTo(screen.x + 16, bodyY - 6 + flap);
+    ctx.lineTo(screen.x + 10, bodyY + 6);
+    ctx.closePath();
+    ctx.fill();
+    ctx.beginPath();
+    ctx.ellipse(screen.x, bodyY + 2, 7, 12, 0, 0, Math.PI * 2);
+    ctx.fill();
+  } else if (npc.type === "ciaSkeleton") {
+    const faceX = npc.faceX || 1;
+    const faceY = npc.faceY || 0;
+    const handX = screen.x + faceX * 8;
+    const handY = screen.y + faceY * 8;
+    ctx.strokeStyle = "#e6dccf";
+    ctx.lineWidth = 2.1;
+    ctx.beginPath();
+    ctx.moveTo(screen.x, screen.y - 4);
+    ctx.lineTo(screen.x, screen.y + 8);
+    ctx.moveTo(screen.x - 6, screen.y + 1);
+    ctx.lineTo(screen.x + 6, screen.y + 1);
+    ctx.moveTo(screen.x, screen.y + 8);
+    ctx.lineTo(screen.x - 5, screen.y + 15);
+    ctx.moveTo(screen.x, screen.y + 8);
+    ctx.lineTo(screen.x + 5, screen.y + 15);
+    ctx.stroke();
+    ctx.fillStyle = "#efe7db";
+    ctx.beginPath();
+    ctx.arc(screen.x, screen.y - 8, 5.5, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.fillStyle = "#16181b";
+    ctx.beginPath();
+    ctx.arc(screen.x - 2, screen.y - 9, 1.1, 0, Math.PI * 2);
+    ctx.arc(screen.x + 2, screen.y - 9, 1.1, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.strokeStyle = "#7c6140";
+    ctx.lineWidth = 2.2;
+    ctx.beginPath();
+    ctx.moveTo(handX - faceY * 4, handY + faceX * 4);
+    ctx.lineTo(handX + faceX * 10, handY + faceY * 10);
+    ctx.stroke();
   } else if (npc.type === "alien") {
     const faceX = npc.faceX || 1;
     const faceY = npc.faceY || 0;
@@ -5825,7 +6528,11 @@ function drawTracers() {
 function drawProjectiles() {
   for (const projectile of state.world.projectiles) {
     const screen = worldToScreen(projectile.x, projectile.y);
-    const drawY = projectile.kind === "ciaBomb" ? screen.y - 40 : projectile.kind === "alienBomb" ? screen.y - 22 : screen.y;
+    const drawY =
+      projectile.kind === "ciaBomb" ? screen.y - 40 :
+      projectile.kind === "alienBomb" ? screen.y - 22 :
+      projectile.kind === "batMeteor" ? screen.y - 58 :
+      screen.y;
     ctx.fillStyle = projectile.color;
     ctx.beginPath();
     ctx.arc(screen.x, drawY, projectile.radius, 0, Math.PI * 2);
@@ -5843,6 +6550,13 @@ function drawProjectiles() {
       ctx.beginPath();
       ctx.moveTo(screen.x, drawY + projectile.radius);
       ctx.lineTo(screen.x, screen.y + 2);
+      ctx.stroke();
+    } else if (projectile.kind === "batMeteor") {
+      ctx.strokeStyle = "rgba(255, 186, 126, 0.72)";
+      ctx.lineWidth = 2.2;
+      ctx.beginPath();
+      ctx.moveTo(screen.x, drawY + projectile.radius);
+      ctx.lineTo(screen.x - projectile.vx * 9, screen.y + 12);
       ctx.stroke();
     }
   }
