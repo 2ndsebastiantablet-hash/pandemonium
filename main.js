@@ -167,6 +167,7 @@ const CONFIG = {
   debrisLifetime: 2.8,
   debrisGravity: 0.16,
   maxDebrisPieces: 280,
+  maxRubblePieces: 900,
   dayNightDuration: 96,
   followerRadius: 4.2,
   bodyLinkAlpha: 0.12,
@@ -224,6 +225,7 @@ const state = {
     projectiles: [],
     explosions: [],
     debris: [],
+    rubble: [],
     traps: [],
     blood: [],
     policeSpawnCooldown: 0,
@@ -1720,6 +1722,10 @@ function createCIASlothBossNpc(spawnPoint, rng) {
     contactCooldown: 0,
     heldNpcId: null,
     holdingPlayer: false,
+    pickupCueX: 0,
+    pickupCueY: 0,
+    pickupCueTimer: 0,
+    clawTimer: 0,
     altitude: 0,
     armSwing: randomBetween(rng, 0, Math.PI * 2),
     title: "The Colossus Sloth",
@@ -3352,6 +3358,7 @@ function findNearestVictimForCIASloth(npc, radius, options = {}) {
 }
 
 function damageStructuresAroundCIASloth(npc, impactScale = 1) {
+  let hits = 0;
   for (const building of getLoadedBuildings()) {
     const centerX = building.x + building.w * 0.5;
     const centerY = building.y + building.h * 0.5;
@@ -3360,6 +3367,7 @@ function damageStructuresAroundCIASloth(npc, impactScale = 1) {
       continue;
     }
     applyDamageToBuilding(building, 36 * impactScale, centerX - npc.x, centerY - npc.y);
+    hits += 1;
   }
   for (const chunk of state.world.chunks.values()) {
     for (const deco of chunk.decor) {
@@ -3374,8 +3382,10 @@ function damageStructuresAroundCIASloth(npc, impactScale = 1) {
         continue;
       }
       applyDamageToDecor(deco, 32 * impactScale, deco.x - npc.x, deco.y - npc.y);
+      hits += 1;
     }
   }
+  return hits;
 }
 
 function getCIASlothMouthPosition(npc) {
@@ -3474,40 +3484,7 @@ function callPoliceBossReinforcements(npc) {
 }
 
 function updateCivilian(npc, dt) {
-  if (npc.heldByBoss) {
-    npc.vx = 0;
-    npc.vy = 0;
-    npc.thrownTimer = 0;
-    return;
-  }
-
-  if (npc.thrownTimer > 0) {
-    npc.thrownTimer -= dt;
-    npc.x += npc.vx;
-    npc.y += npc.vy;
-    npc.vx *= 0.985;
-    npc.vy *= 0.985;
-    for (const building of getLoadedBuildings()) {
-      if (!circleIntersectsRect(npc.x, npc.y, npc.radius + 2, building)) {
-        continue;
-      }
-      applyDamageToBuilding(building, 24, npc.vx || 1, npc.vy || 0);
-      killNpcByCIASloth(npc, npc.x - npc.vx * 2, npc.y - npc.vy * 2);
-      return;
-    }
-    for (const chunk of state.world.chunks.values()) {
-      for (const deco of chunk.decor) {
-        if (deco.destroyed || deco.falling || !wormCircleHitsDecor(npc.x, npc.y, npc.radius + 3, deco)) {
-          continue;
-        }
-        applyDamageToDecor(deco, 20, npc.vx || 1, npc.vy || 0);
-        killNpcByCIASloth(npc, npc.x - npc.vx * 2, npc.y - npc.vy * 2);
-        return;
-      }
-    }
-    if (npc.thrownTimer <= 0) {
-      npc.fearTimer = Math.max(npc.fearTimer || 0, 2.2);
-    }
+  if (updateNpcBossHoldOrThrow(npc, dt)) {
     return;
   }
 
@@ -3640,6 +3617,46 @@ function updateCivilian(npc, dt) {
     }
     steerEntity(npc, npc.targetX, npc.targetY, 0.055, CONFIG.civilianSpeed, dt);
   }
+}
+
+function updateNpcBossHoldOrThrow(npc, dt) {
+  if (npc.heldByBoss) {
+    npc.vx = 0;
+    npc.vy = 0;
+    npc.thrownTimer = 0;
+    return true;
+  }
+
+  if (npc.thrownTimer > 0) {
+    npc.thrownTimer -= dt;
+    npc.x += npc.vx;
+    npc.y += npc.vy;
+    npc.vx *= 0.985;
+    npc.vy *= 0.985;
+    for (const building of getLoadedBuildings()) {
+      if (!circleIntersectsRect(npc.x, npc.y, npc.radius + 2, building)) {
+        continue;
+      }
+      applyDamageToBuilding(building, 24, npc.vx || 1, npc.vy || 0);
+      killNpcByCIASloth(npc, npc.x - npc.vx * 2, npc.y - npc.vy * 2);
+      return true;
+    }
+    for (const chunk of state.world.chunks.values()) {
+      for (const deco of chunk.decor) {
+        if (deco.destroyed || deco.falling || !wormCircleHitsDecor(npc.x, npc.y, npc.radius + 3, deco)) {
+          continue;
+        }
+        applyDamageToDecor(deco, 20, npc.vx || 1, npc.vy || 0);
+        killNpcByCIASloth(npc, npc.x - npc.vx * 2, npc.y - npc.vy * 2);
+        return true;
+      }
+    }
+    if (npc.thrownTimer <= 0) {
+      npc.fearTimer = Math.max(npc.fearTimer || 0, 2.2);
+    }
+    return true;
+  }
+  return false;
 }
 
 function updatePolice(npc, dt) {
@@ -4688,6 +4705,8 @@ function updateCIASlothBoss(npc, dt) {
   npc.beamChargeTimer = Math.max(0, npc.beamChargeTimer - dt);
   npc.beamTimer = Math.max(0, npc.beamTimer - dt);
   npc.contactCooldown = Math.max(0, npc.contactCooldown - dt);
+  npc.pickupCueTimer = Math.max(0, (npc.pickupCueTimer || 0) - dt);
+  npc.clawTimer = Math.max(0, (npc.clawTimer || 0) - dt);
   npc.armSwing += dt * 1.6;
   npc.altitude = Math.max(0, (npc.altitude || 0) - dt * 140);
 
@@ -4757,6 +4776,11 @@ function updateCIASlothBoss(npc, dt) {
 
   const victim = findNearestVictimForCIASloth(npc, CONFIG.ciaSlothGrabRange, { includePlayer: true, anyNpc: true });
   if (!isBeaming && !heldNpc && !npc.holdingPlayer && victim) {
+    npc.pickupCueX = victim.type === "player" ? state.player.x : victim.x;
+    npc.pickupCueY = victim.type === "player" ? state.player.y : victim.y;
+    npc.pickupCueTimer = 0.28;
+  }
+  if (!isBeaming && !heldNpc && !npc.holdingPlayer && victim) {
     if (victim.type === "player" && npc.throwCooldown <= 0) {
       state.player.heldByBoss = npc.id;
       state.player.thrownTimer = 0;
@@ -4794,7 +4818,10 @@ function updateCIASlothBoss(npc, dt) {
   }
 
   if (!isBeaming && npc.smashCooldown <= 0) {
-    damageStructuresAroundCIASloth(npc, 1 + Math.random() * 0.35);
+    const hitCount = damageStructuresAroundCIASloth(npc, 1 + Math.random() * 0.35);
+    if (hitCount > 0) {
+      npc.clawTimer = 0.42;
+    }
     npc.smashCooldown = CONFIG.ciaSlothSmashCooldown;
   }
 
@@ -4803,7 +4830,9 @@ function updateCIASlothBoss(npc, dt) {
     state.world.ambientQuake = Math.max(state.world.ambientQuake, CONFIG.ciaSlothQuakeStrength);
     state.camera.shakeX = (Math.random() - 0.5) * CONFIG.ciaSlothQuakeStrength * 10;
     state.camera.shakeY = (Math.random() - 0.5) * CONFIG.ciaSlothQuakeStrength * 8;
-    damageStructuresAroundCIASloth(npc, 1.5);
+    if (damageStructuresAroundCIASloth(npc, 1.5) > 0) {
+      npc.clawTimer = 0.36;
+    }
     if (distanceBetween(npc.x, npc.y, state.player.x, state.player.y) <= 170 + state.player.radius) {
       damagePlayer(14, npc.x, npc.y, 1.8);
     }
@@ -5237,6 +5266,38 @@ function spawnDebrisBurst(x, y, color, count, impulseX, impulseY, size = 4) {
   }
 }
 
+function spawnBuildingRubble(building) {
+  const area = Math.max(1, building.w * building.h);
+  const count = clamp(Math.round(area / 1150), 14, 90);
+  const baseColor = building.chipColor || "#777";
+  for (let index = 0; index < count; index += 1) {
+    const spreadX = (Math.random() - 0.5) * building.w * 0.92;
+    const spreadY = (Math.random() - 0.5) * building.h * 0.92;
+    const radius = randomBetween(Math.random, 3.5, 12 + Math.sqrt(area) * 0.018);
+    const points = [];
+    const sides = randomInt(Math.random, 4, 8);
+    for (let side = 0; side < sides; side += 1) {
+      const angle = (side / sides) * Math.PI * 2;
+      const wobble = 0.52 + Math.random() * 0.75;
+      points.push({
+        x: Math.cos(angle) * radius * wobble,
+        y: Math.sin(angle) * radius * wobble * (0.72 + Math.random() * 0.36),
+      });
+    }
+    state.world.rubble.push({
+      x: building.x + building.w * 0.5 + spreadX,
+      y: building.y + building.h * 0.5 + spreadY,
+      rotation: Math.random() * Math.PI * 2,
+      color: baseColor,
+      shade: randomBetween(Math.random, 0.72, 1.12),
+      points,
+    });
+  }
+  if (state.world.rubble.length > CONFIG.maxRubblePieces) {
+    state.world.rubble.splice(0, state.world.rubble.length - CONFIG.maxRubblePieces);
+  }
+}
+
 function spawnOrganicBurst(x, y, intensity, impulseX, impulseY, options = {}) {
   const palette = ["rgba(120, 14, 14, 0.95)", "rgba(156, 26, 26, 0.92)", "rgba(98, 8, 8, 0.96)"];
   const shapes = ["chunk", "strip", "curl"];
@@ -5408,6 +5469,7 @@ function updateFallingStructures(dt) {
         if (building.fallAngle >= 1.28) {
           building.destroyed = true;
           building.falling = false;
+          spawnBuildingRubble(building);
           spawnDebrisBurst(building.x + building.w * 0.5, building.y + building.h * 0.75, building.chipColor, 22, building.fallDirection * 1.2, 0.8, 6);
         }
       }
@@ -5567,6 +5629,9 @@ function updateNpcs(dt) {
       continue;
     }
     applyEarthquakeToNpc(npc, dt);
+    if (npc.type !== "civilian" && updateNpcBossHoldOrThrow(npc, dt)) {
+      continue;
+    }
     if (npc.type === "civilian") {
       updateCivilian(npc, dt);
     } else if (npc.type === "police") {
@@ -6012,6 +6077,7 @@ function resetGame() {
   state.world.projectiles = [];
   state.world.explosions = [];
   state.world.debris = [];
+  state.world.rubble = [];
   state.world.traps = [];
   state.world.blood = [];
   state.world.nextNpcId = 1;
@@ -6327,12 +6393,52 @@ function drawTown() {
     for (const road of chunk.roads) {
       drawRoad(road);
     }
+    drawRubbleForChunk(chunk);
     for (const building of chunk.buildings) {
       drawBuilding(building);
     }
     for (const deco of chunk.decor) {
       drawDecor(deco);
     }
+  }
+}
+
+function tintHexColor(hex, factor) {
+  if (!hex || !hex.startsWith("#") || hex.length < 7) {
+    return hex || "#777";
+  }
+  const r = clamp(Math.round(parseInt(hex.slice(1, 3), 16) * factor), 0, 255);
+  const g = clamp(Math.round(parseInt(hex.slice(3, 5), 16) * factor), 0, 255);
+  const b = clamp(Math.round(parseInt(hex.slice(5, 7), 16) * factor), 0, 255);
+  return `rgb(${r}, ${g}, ${b})`;
+}
+
+function drawRubbleForChunk(chunk) {
+  const minX = chunk.originX;
+  const minY = chunk.originY;
+  const maxX = minX + CONFIG.chunkSize;
+  const maxY = minY + CONFIG.chunkSize;
+  for (const piece of state.world.rubble) {
+    if (piece.x < minX || piece.x > maxX || piece.y < minY || piece.y > maxY) {
+      continue;
+    }
+    const screen = worldToScreen(piece.x, piece.y);
+    ctx.save();
+    ctx.translate(screen.x, screen.y);
+    ctx.rotate(piece.rotation);
+    ctx.fillStyle = tintHexColor(piece.color, piece.shade || 1);
+    ctx.beginPath();
+    for (let index = 0; index < piece.points.length; index += 1) {
+      const point = piece.points[index];
+      if (index === 0) {
+        ctx.moveTo(point.x, point.y);
+      } else {
+        ctx.lineTo(point.x, point.y);
+      }
+    }
+    ctx.closePath();
+    ctx.fill();
+    ctx.restore();
   }
 }
 
@@ -6754,27 +6860,49 @@ function drawNpc(npc) {
     const sideY = faceX;
     const scale = npc.radius / 34;
     const bodyY = screen.y - (npc.altitude || 0) * 0.18;
-    const swing = Math.sin(npc.armSwing) * 0.55;
+    const clawing = (npc.clawTimer || 0) > 0;
+    const reaching = (npc.pickupCueTimer || 0) > 0;
+    if (reaching) {
+      const cue = worldToScreen(npc.pickupCueX, npc.pickupCueY);
+      ctx.fillStyle = "rgba(0, 0, 0, 0.34)";
+      ctx.beginPath();
+      ctx.ellipse(cue.x, cue.y, 26 * scale, 12 * scale, 0, 0, Math.PI * 2);
+      ctx.fill();
+    }
+    const swing = Math.sin(npc.armSwing * (clawing ? 8 : 1)) * (clawing ? 1.2 : 0.35);
     const leftShoulderX = screen.x - sideX * 20 * scale;
     const leftShoulderY = bodyY - sideY * 20 * scale - 14 * scale;
     const rightShoulderX = screen.x + sideX * 20 * scale;
     const rightShoulderY = bodyY + sideY * 20 * scale - 14 * scale;
-    const leftHandX = leftShoulderX - sideX * (110 * scale + swing * 26 * scale) + faceX * 56 * scale;
-    const leftHandY = leftShoulderY - sideY * (110 * scale + swing * 26 * scale) + faceY * 56 * scale;
-    const rightHandX = rightShoulderX + sideX * (110 * scale - swing * 26 * scale) + faceX * 56 * scale;
-    const rightHandY = rightShoulderY + sideY * (110 * scale - swing * 26 * scale) + faceY * 56 * scale;
-    ctx.fillStyle = "rgba(0, 0, 0, 0.18)";
-    ctx.beginPath();
-    ctx.ellipse(screen.x, screen.y + 54 * scale, 76 * scale, 30 * scale, 0, 0, Math.PI * 2);
-    ctx.fill();
+    const cue = reaching ? worldToScreen(npc.pickupCueX, npc.pickupCueY) : null;
+    const defaultLeftHand = {
+      x: screen.x - sideX * 36 * scale + faceX * 18 * scale + swing * sideX * 12 * scale,
+      y: bodyY - sideY * 36 * scale - 8 * scale + swing * sideY * 12 * scale,
+    };
+    const defaultRightHand = {
+      x: screen.x + sideX * 36 * scale + faceX * 18 * scale - swing * sideX * 12 * scale,
+      y: bodyY + sideY * 36 * scale - 8 * scale - swing * sideY * 12 * scale,
+    };
+    const leftHandX = cue ? cue.x - sideX * 20 * scale : defaultLeftHand.x;
+    const leftHandY = cue ? cue.y - sideY * 20 * scale - 8 * scale : defaultLeftHand.y;
+    const rightHandX = cue ? cue.x + sideX * 20 * scale : defaultRightHand.x;
+    const rightHandY = cue ? cue.y + sideY * 20 * scale - 8 * scale : defaultRightHand.y;
+    const leftElbow = {
+      x: leftShoulderX - sideX * 70 * scale + faceX * (reaching ? 34 : 18) * scale,
+      y: leftShoulderY - sideY * 70 * scale + faceY * (reaching ? 34 : 18) * scale + 32 * scale,
+    };
+    const rightElbow = {
+      x: rightShoulderX + sideX * 70 * scale + faceX * (reaching ? 34 : 18) * scale,
+      y: rightShoulderY + sideY * 70 * scale + faceY * (reaching ? 34 : 18) * scale + 32 * scale,
+    };
+    const leftWrist = { x: lerp(leftElbow.x, leftHandX, 0.7), y: lerp(leftElbow.y, leftHandY, 0.7) };
+    const rightWrist = { x: lerp(rightElbow.x, rightHandX, 0.7), y: lerp(rightElbow.y, rightHandY, 0.7) };
+    drawSlothArm({ x: leftShoulderX, y: leftShoulderY }, leftElbow, leftWrist, { x: leftHandX, y: leftHandY }, scale, -1, clawing);
+    drawSlothArm({ x: rightShoulderX, y: rightShoulderY }, rightElbow, rightWrist, { x: rightHandX, y: rightHandY }, scale, 1, clawing);
     ctx.strokeStyle = "#604029";
-    ctx.lineWidth = 22 * scale;
+    ctx.lineWidth = 18 * scale;
     ctx.lineCap = "round";
     ctx.beginPath();
-    ctx.moveTo(leftShoulderX, leftShoulderY);
-    ctx.lineTo(leftHandX, leftHandY);
-    ctx.moveTo(rightShoulderX, rightShoulderY);
-    ctx.lineTo(rightHandX, rightHandY);
     ctx.moveTo(screen.x - 18 * scale, bodyY + 36 * scale);
     ctx.lineTo(screen.x - 44 * scale, bodyY + 158 * scale);
     ctx.moveTo(screen.x + 18 * scale, bodyY + 36 * scale);
@@ -6825,6 +6953,11 @@ function drawNpc(npc) {
       ctx.fill();
       ctx.fillStyle = "#4b4f6a";
       ctx.fillRect(rightHandX - 6 * scale, rightHandY - 8 * scale, 12 * scale, 18 * scale);
+    } else if (npc.holdingPlayer) {
+      ctx.fillStyle = "#9d1111";
+      ctx.beginPath();
+      ctx.arc(rightHandX, rightHandY - 14 * scale, 10 * scale, 0, Math.PI * 2);
+      ctx.fill();
     }
   } else if (npc.type === "ciaBatEye") {
     ctx.fillStyle = "#f0dfd2";
@@ -7180,6 +7313,57 @@ function drawProjectiles() {
       ctx.stroke();
     }
   }
+}
+
+function drawSlothHand(x, y, scale, angle, mirror = 1, clawing = false) {
+  ctx.save();
+  ctx.translate(x, y);
+  ctx.rotate(angle);
+  ctx.fillStyle = "#8d6749";
+  ctx.beginPath();
+  ctx.ellipse(0, 0, 12 * scale, 15 * scale, 0, 0, Math.PI * 2);
+  ctx.fill();
+
+  for (let finger = 0; finger < 5; finger += 1) {
+    const offset = (finger - 2) * 5.4 * scale;
+    const curl = clawing ? Math.sin(state.time * 24 + finger) * 4 * scale : 0;
+    const length = (finger === 0 || finger === 4 ? 15 : 19) * scale;
+    const baseX = offset * mirror;
+    const baseY = -8 * scale;
+    ctx.strokeStyle = "#8d6749";
+    ctx.lineWidth = 4.6 * scale;
+    ctx.lineCap = "round";
+    ctx.beginPath();
+    ctx.moveTo(baseX, baseY);
+    ctx.lineTo(baseX + curl * mirror, baseY - length);
+    ctx.stroke();
+    ctx.fillStyle = "#2b2118";
+    ctx.beginPath();
+    ctx.moveTo(baseX + curl * mirror - 2.6 * scale, baseY - length);
+    ctx.lineTo(baseX + curl * mirror + 2.6 * scale, baseY - length);
+    ctx.lineTo(baseX + curl * mirror, baseY - length - 8 * scale);
+    ctx.closePath();
+    ctx.fill();
+  }
+  ctx.restore();
+}
+
+function drawSlothArm(shoulder, elbow, wrist, hand, scale, mirror, clawing) {
+  ctx.strokeStyle = "#604029";
+  ctx.lineCap = "round";
+  ctx.lineJoin = "round";
+  ctx.lineWidth = 17 * scale;
+  ctx.beginPath();
+  ctx.moveTo(shoulder.x, shoulder.y);
+  ctx.lineTo(elbow.x, elbow.y);
+  ctx.stroke();
+  ctx.lineWidth = 15 * scale;
+  ctx.beginPath();
+  ctx.moveTo(elbow.x, elbow.y);
+  ctx.lineTo(wrist.x, wrist.y);
+  ctx.stroke();
+  const angle = Math.atan2(hand.y - wrist.y, hand.x - wrist.x) + Math.PI * 0.5;
+  drawSlothHand(hand.x, hand.y, scale, angle, mirror, clawing);
 }
 
 function drawTraps() {
