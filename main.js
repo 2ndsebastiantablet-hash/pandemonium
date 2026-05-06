@@ -143,6 +143,11 @@ const CONFIG = {
   ciaSlothBeamWidth: 28,
   ciaSlothQuakeStrength: 0.92,
   ciaSlothGrabRange: 165,
+  ciaSlothRubbleCooldown: 7.2,
+  ciaSlothRubbleChargeTime: 0.92,
+  ciaSlothRubbleSpeed: 10.6,
+  ciaSlothRubbleDamage: 42,
+  ciaSlothRubbleBlastRadius: 136,
   militaryBaseCannonRange: 430,
   militaryBaseMinigunRange: 320,
   militaryBaseCannonCooldown: 2.6,
@@ -1719,6 +1724,11 @@ function createCIASlothBossNpc(spawnPoint, rng) {
     beamSweep: rng() > 0.5 ? 1 : -1,
     beamTargetAngle: 0,
     beamFireTimer: 0,
+    rubbleCooldown: randomBetween(rng, 2.2, 5.1),
+    rubbleChargeTimer: 0,
+    rubbleHeld: false,
+    rubbleTargetX: spawnPoint.x,
+    rubbleTargetY: spawnPoint.y,
     contactCooldown: 0,
     heldNpcId: null,
     holdingPlayer: false,
@@ -3227,15 +3237,13 @@ function spawnCIASkeletonWave(npc, count) {
 }
 
 function damageCIABatBoss(npc, amount, sourceX, sourceY) {
-  npc.health = clamp(npc.health - amount, 0, npc.maxHealth);
   const dx = npc.x - sourceX;
   const dy = npc.y - sourceY;
   const distance = Math.hypot(dx, dy) || 0.0001;
-  npc.vx += (dx / distance) * 0.5;
-  npc.vy += (dy / distance) * 0.5;
-  if (npc.health <= 0) {
-    absorbNpc(npc);
-  }
+  npc.health = npc.maxHealth;
+  npc.vx += (dx / distance) * 0.42;
+  npc.vy += (dy / distance) * 0.42;
+  spawnVisualBurst(npc.x, npc.y - (npc.altitude || 0) * 0.25, 12 + Math.min(24, amount), "rgba(255, 92, 128, 0.32)");
 }
 
 function damageCIASlothBoss(npc, amount, sourceX, sourceY) {
@@ -3248,6 +3256,10 @@ function damageCIASlothBoss(npc, amount, sourceX, sourceY) {
 }
 
 function killNpcByCIASloth(npc, sourceX, sourceY) {
+  if (npc.type === "ciaBatBoss") {
+    damageCIABatBoss(npc, 18, sourceX, sourceY);
+    return;
+  }
   if (npc.type === "civilian" && npc.inCar) {
     releaseNpcVehicle(npc, { carType: "civilianCar", color: npc.carColor });
   } else if ((npc.type === "police" || npc.type === "policeBoss") && npc.inVehicle) {
@@ -3386,6 +3398,131 @@ function damageStructuresAroundCIASloth(npc, impactScale = 1) {
     }
   }
   return hits;
+}
+
+function chooseCIASlothRubbleTarget(npc) {
+  const playerDistance = distanceBetween(npc.x, npc.y, state.player.x, state.player.y);
+  if (playerDistance < 780 || Math.random() > 0.58) {
+    return { x: state.player.x, y: state.player.y };
+  }
+
+  let bestStructure = null;
+  let bestDistance = 720;
+  for (const building of getLoadedBuildings()) {
+    const centerX = building.x + building.w * 0.5;
+    const centerY = building.y + building.h * 0.5;
+    const distance = distanceBetween(npc.x, npc.y, centerX, centerY);
+    if (distance < bestDistance) {
+      bestStructure = { x: centerX, y: centerY };
+      bestDistance = distance;
+    }
+  }
+  if (bestStructure && Math.random() > 0.32) {
+    return bestStructure;
+  }
+
+  const victim = findNearestVictimForCIASloth(npc, 680, { includePlayer: false, anyNpc: true });
+  if (victim) {
+    return { x: victim.x, y: victim.y };
+  }
+
+  const angle = Math.random() * Math.PI * 2;
+  const distance = 180 + Math.random() * 420;
+  return {
+    x: npc.x + Math.cos(angle) * distance,
+    y: npc.y + Math.sin(angle) * distance,
+  };
+}
+
+function consumeRubbleForCIASlothThrow(npc) {
+  const rubble = state.world.rubble;
+  if (!rubble.length) {
+    return "#6b5c4d";
+  }
+  const candidates = rubble
+    .map((piece, index) => ({
+      index,
+      distance: distanceBetween(npc.x, npc.y, piece.x, piece.y),
+      color: piece.color,
+    }))
+    .sort((a, b) => a.distance - b.distance)
+    .slice(0, Math.min(10, rubble.length));
+  candidates
+    .slice()
+    .sort((a, b) => b.index - a.index)
+    .forEach((candidate) => rubble.splice(candidate.index, 1));
+  return candidates[0]?.color || "#6b5c4d";
+}
+
+function damageWorldAtImpact(x, y, radius, impact, sourceId = null) {
+  for (const building of getLoadedBuildings()) {
+    if (!circleIntersectsRect(x, y, radius, building)) {
+      continue;
+    }
+    const centerX = building.x + building.w * 0.5;
+    const centerY = building.y + building.h * 0.5;
+    applyDamageToBuilding(building, impact, centerX - x, centerY - y);
+  }
+
+  for (const chunk of state.world.chunks.values()) {
+    for (const deco of chunk.decor) {
+      if (deco.destroyed || deco.falling) {
+        continue;
+      }
+      if (!wormCircleHitsDecor(x, y, radius, deco)) {
+        continue;
+      }
+      applyDamageToDecor(deco, impact * 0.82, deco.x - x, deco.y - y);
+    }
+  }
+
+  for (const target of state.world.npcs) {
+    if (!target.alive || target.id === sourceId || target.type === "ciaSlothBoss") {
+      continue;
+    }
+    if (distanceBetween(x, y, target.x, target.y) > radius + target.radius) {
+      continue;
+    }
+    killNpcByCIASloth(target, x, y);
+  }
+}
+
+function launchCIASlothRubble(npc) {
+  const scale = npc.radius / 34;
+  const faceX = npc.faceX || 1;
+  const faceY = npc.faceY || 0;
+  const sideX = -faceY;
+  const sideY = faceX;
+  const startX = npc.x + faceX * 78 * scale + sideX * 32 * scale;
+  const startY = npc.y + faceY * 78 * scale + sideY * 32 * scale - 92 * scale;
+  const targetX = npc.rubbleTargetX || state.player.x;
+  const targetY = npc.rubbleTargetY || state.player.y;
+  const dx = targetX - startX;
+  const dy = targetY - startY;
+  const distance = Math.hypot(dx, dy) || 0.0001;
+  const color = consumeRubbleForCIASlothThrow(npc);
+
+  state.world.projectiles.push({
+    kind: "slothRubble",
+    x: startX,
+    y: startY,
+    vx: (dx / distance) * CONFIG.ciaSlothRubbleSpeed,
+    vy: (dy / distance) * CONFIG.ciaSlothRubbleSpeed,
+    targetX,
+    targetY,
+    life: clamp(distance / (CONFIG.ciaSlothRubbleSpeed * 60) + 0.16, 0.32, 1.3),
+    radius: clamp(13 * scale, 28, 58),
+    blastRadius: CONFIG.ciaSlothRubbleBlastRadius,
+    damage: CONFIG.ciaSlothRubbleDamage,
+    impact: 78,
+    color,
+    ownerType: npc.type,
+    ownerId: npc.id,
+    fireTrailTimer: 0,
+  });
+  spawnVisualBurst(startX, startY, 28 * scale, "rgba(255, 128, 54, 0.62)");
+  npc.rubbleCooldown = CONFIG.ciaSlothRubbleCooldown + Math.random() * 2.4;
+  npc.rubbleHeld = false;
 }
 
 function getCIASlothMouthPosition(npc) {
@@ -4700,10 +4837,13 @@ function updateCIASlothBoss(npc, dt) {
   npc.eatCooldown -= dt;
   npc.jumpCooldown -= dt;
   npc.beamCooldown -= dt;
+  npc.rubbleCooldown -= dt;
   const previousBeamCharge = npc.beamChargeTimer;
   const previousBeamTimer = npc.beamTimer;
+  const previousRubbleCharge = npc.rubbleChargeTimer || 0;
   npc.beamChargeTimer = Math.max(0, npc.beamChargeTimer - dt);
   npc.beamTimer = Math.max(0, npc.beamTimer - dt);
+  npc.rubbleChargeTimer = Math.max(0, (npc.rubbleChargeTimer || 0) - dt);
   npc.contactCooldown = Math.max(0, npc.contactCooldown - dt);
   npc.pickupCueTimer = Math.max(0, (npc.pickupCueTimer || 0) - dt);
   npc.clawTimer = Math.max(0, (npc.clawTimer || 0) - dt);
@@ -4721,7 +4861,8 @@ function updateCIASlothBoss(npc, dt) {
   }
 
   const isBeaming = npc.beamChargeTimer > 0 || npc.beamTimer > 0;
-  if (!isBeaming) {
+  let isChargingRubble = npc.rubbleChargeTimer > 0 || npc.rubbleHeld;
+  if (!isBeaming && !isChargingRubble) {
     steerEntity(npc, npc.targetX, npc.targetY, 0.05, CONFIG.ciaSlothSpeed, dt);
   } else {
     npc.vx *= 0.88;
@@ -4774,13 +4915,29 @@ function updateCIASlothBoss(npc, dt) {
     npc.beamPending = true;
   }
 
+  if (previousRubbleCharge > 0 && npc.rubbleChargeTimer <= 0 && npc.rubbleHeld) {
+    launchCIASlothRubble(npc);
+  } else if (!isBeaming && !heldNpc && !npc.holdingPlayer && npc.rubbleCooldown <= 0 && npc.rubbleChargeTimer <= 0) {
+    const target = chooseCIASlothRubbleTarget(npc);
+    npc.rubbleTargetX = target.x;
+    npc.rubbleTargetY = target.y;
+    npc.rubbleChargeTimer = CONFIG.ciaSlothRubbleChargeTime;
+    npc.rubbleHeld = true;
+    npc.pickupCueX = target.x;
+    npc.pickupCueY = target.y;
+    npc.pickupCueTimer = 0.42;
+    npc.rubbleCooldown = CONFIG.ciaSlothRubbleCooldown;
+    isChargingRubble = true;
+    spawnVisualBurst(npc.x + (npc.faceX || 1) * 70 * scale, npc.y + (npc.faceY || 0) * 70 * scale, 24 * scale, "rgba(255, 151, 72, 0.45)");
+  }
+
   const victim = findNearestVictimForCIASloth(npc, CONFIG.ciaSlothGrabRange, { includePlayer: true, anyNpc: true });
-  if (!isBeaming && !heldNpc && !npc.holdingPlayer && victim) {
+  if (!isBeaming && !isChargingRubble && !heldNpc && !npc.holdingPlayer && victim) {
     npc.pickupCueX = victim.type === "player" ? state.player.x : victim.x;
     npc.pickupCueY = victim.type === "player" ? state.player.y : victim.y;
     npc.pickupCueTimer = 0.28;
   }
-  if (!isBeaming && !heldNpc && !npc.holdingPlayer && victim) {
+  if (!isBeaming && !isChargingRubble && !heldNpc && !npc.holdingPlayer && victim) {
     if (victim.type === "player" && npc.throwCooldown <= 0) {
       state.player.heldByBoss = npc.id;
       state.player.thrownTimer = 0;
@@ -5582,7 +5739,10 @@ function updateProjectiles(dt) {
     projectile.x += projectile.vx * dt * 60;
     projectile.y += projectile.vy * dt * 60;
 
-    const hitBuilding = projectile.ownerType === "alien" ? false : lineOfSightBlocked(previousX, previousY, projectile.x, projectile.y);
+    const hitBuilding =
+      projectile.ownerType === "alien" || projectile.kind === "slothRubble"
+        ? false
+        : lineOfSightBlocked(previousX, previousY, projectile.x, projectile.y);
     const hitPlayer = distanceBetween(projectile.x, projectile.y, state.player.x, state.player.y) <= projectile.radius + state.player.radius;
 
     if (projectile.kind === "batLaser") {
@@ -5590,6 +5750,23 @@ function updateProjectiles(dt) {
         damagePlayer(projectile.damage, projectile.x, projectile.y, 0.22);
         state.world.projectiles.splice(index, 1);
       } else if (projectile.life <= 0 || hitBuilding) {
+        state.world.projectiles.splice(index, 1);
+      }
+      continue;
+    }
+
+    if (projectile.kind === "slothRubble") {
+      projectile.fireTrailTimer -= dt;
+      if (projectile.fireTrailTimer <= 0) {
+        spawnVisualBurst(projectile.x, projectile.y, projectile.radius * 0.9, "rgba(255, 124, 44, 0.58)");
+        projectile.fireTrailTimer = 0.045;
+      }
+      const landed = distanceBetween(projectile.x, projectile.y, projectile.targetX, projectile.targetY) <= projectile.radius + 20;
+      if (projectile.life <= 0 || landed || hitPlayer) {
+        explodeAt(projectile.x, projectile.y, projectile.blastRadius, projectile.damage, projectile.color);
+        damageWorldAtImpact(projectile.x, projectile.y, projectile.blastRadius, projectile.impact || 70, projectile.ownerId);
+        spawnVisualBurst(projectile.x, projectile.y, projectile.blastRadius * 0.65, "rgba(255, 94, 34, 0.68)");
+        state.world.ambientQuake = Math.max(state.world.ambientQuake, 0.72);
         state.world.projectiles.splice(index, 1);
       }
       continue;
@@ -6862,6 +7039,7 @@ function drawNpc(npc) {
     const bodyY = screen.y - (npc.altitude || 0) * 0.18;
     const clawing = (npc.clawTimer || 0) > 0;
     const reaching = (npc.pickupCueTimer || 0) > 0;
+    const rubbleReady = npc.rubbleHeld || npc.rubbleChargeTimer > 0;
     if (reaching) {
       const cue = worldToScreen(npc.pickupCueX, npc.pickupCueY);
       ctx.fillStyle = "rgba(0, 0, 0, 0.34)";
@@ -6874,7 +7052,6 @@ function drawNpc(npc) {
     const leftShoulderY = bodyY - sideY * 20 * scale - 14 * scale;
     const rightShoulderX = screen.x + sideX * 20 * scale;
     const rightShoulderY = bodyY + sideY * 20 * scale - 14 * scale;
-    const cue = reaching ? worldToScreen(npc.pickupCueX, npc.pickupCueY) : null;
     const defaultLeftHand = {
       x: screen.x - sideX * 36 * scale + faceX * 18 * scale + swing * sideX * 12 * scale,
       y: bodyY - sideY * 36 * scale - 8 * scale + swing * sideY * 12 * scale,
@@ -6883,6 +7060,13 @@ function drawNpc(npc) {
       x: screen.x + sideX * 36 * scale + faceX * 18 * scale - swing * sideX * 12 * scale,
       y: bodyY + sideY * 36 * scale - 8 * scale - swing * sideY * 12 * scale,
     };
+    if (rubbleReady) {
+      defaultLeftHand.x = screen.x - sideX * 28 * scale + faceX * 26 * scale;
+      defaultLeftHand.y = bodyY - sideY * 28 * scale - 48 * scale;
+      defaultRightHand.x = screen.x + sideX * 50 * scale + faceX * 28 * scale;
+      defaultRightHand.y = bodyY + sideY * 50 * scale - 118 * scale;
+    }
+    const cue = reaching && !rubbleReady ? worldToScreen(npc.pickupCueX, npc.pickupCueY) : null;
     const leftHandX = cue ? cue.x - sideX * 20 * scale : defaultLeftHand.x;
     const leftHandY = cue ? cue.y - sideY * 20 * scale - 8 * scale : defaultLeftHand.y;
     const rightHandX = cue ? cue.x + sideX * 20 * scale : defaultRightHand.x;
@@ -6897,8 +7081,6 @@ function drawNpc(npc) {
     };
     const leftWrist = { x: lerp(leftElbow.x, leftHandX, 0.7), y: lerp(leftElbow.y, leftHandY, 0.7) };
     const rightWrist = { x: lerp(rightElbow.x, rightHandX, 0.7), y: lerp(rightElbow.y, rightHandY, 0.7) };
-    drawSlothArm({ x: leftShoulderX, y: leftShoulderY }, leftElbow, leftWrist, { x: leftHandX, y: leftHandY }, scale, -1, clawing);
-    drawSlothArm({ x: rightShoulderX, y: rightShoulderY }, rightElbow, rightWrist, { x: rightHandX, y: rightHandY }, scale, 1, clawing);
     ctx.strokeStyle = "#604029";
     ctx.lineWidth = 18 * scale;
     ctx.lineCap = "round";
@@ -6944,6 +7126,31 @@ function drawNpc(npc) {
       ctx.beginPath();
       ctx.moveTo(screen.x - 12 * scale, bodyY - 38 * scale);
       ctx.lineTo(screen.x + 12 * scale, bodyY - 34 * scale);
+      ctx.stroke();
+    }
+    drawSlothArm({ x: leftShoulderX, y: leftShoulderY }, leftElbow, leftWrist, { x: leftHandX, y: leftHandY }, scale, -1, clawing);
+    drawSlothArm({ x: rightShoulderX, y: rightShoulderY }, rightElbow, rightWrist, { x: rightHandX, y: rightHandY }, scale, 1, clawing);
+    if (rubbleReady) {
+      const pulse = 1 + Math.sin(state.time * 18) * 0.08;
+      ctx.fillStyle = "rgba(255, 102, 30, 0.38)";
+      ctx.beginPath();
+      ctx.arc(rightHandX + 4 * scale, rightHandY - 15 * scale, 22 * scale * pulse, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.fillStyle = "#6b5544";
+      ctx.beginPath();
+      ctx.moveTo(rightHandX - 12 * scale, rightHandY - 18 * scale);
+      ctx.lineTo(rightHandX + 8 * scale, rightHandY - 29 * scale);
+      ctx.lineTo(rightHandX + 22 * scale, rightHandY - 11 * scale);
+      ctx.lineTo(rightHandX + 4 * scale, rightHandY + 3 * scale);
+      ctx.closePath();
+      ctx.fill();
+      ctx.strokeStyle = "rgba(255, 190, 74, 0.92)";
+      ctx.lineWidth = 3 * scale;
+      ctx.beginPath();
+      ctx.moveTo(rightHandX - 10 * scale, rightHandY - 30 * scale);
+      ctx.lineTo(rightHandX + 10 * scale, rightHandY - 44 * scale);
+      ctx.moveTo(rightHandX + 3 * scale, rightHandY - 29 * scale);
+      ctx.lineTo(rightHandX + 26 * scale, rightHandY - 39 * scale);
       ctx.stroke();
     }
     if (npc.heldNpcId) {
@@ -7275,6 +7482,7 @@ function drawProjectiles() {
       projectile.kind === "ciaBomb" ? screen.y - 40 :
       projectile.kind === "alienBomb" ? screen.y - 22 :
       projectile.kind === "batMeteor" ? screen.y - 58 :
+      projectile.kind === "slothRubble" ? screen.y - 24 :
       screen.y;
     if (projectile.kind === "batLaser") {
       const angle = Math.atan2(projectile.vy, projectile.vx);
@@ -7283,6 +7491,35 @@ function drawProjectiles() {
       ctx.rotate(angle);
       ctx.fillStyle = projectile.color;
       ctx.fillRect(-7, -1.5, 14, 3);
+      ctx.restore();
+      continue;
+    }
+    if (projectile.kind === "slothRubble") {
+      const angle = Math.atan2(projectile.vy, projectile.vx);
+      ctx.save();
+      ctx.translate(screen.x, drawY);
+      ctx.rotate(angle);
+      ctx.fillStyle = "rgba(255, 104, 35, 0.48)";
+      ctx.beginPath();
+      ctx.ellipse(-projectile.radius * 0.72, 0, projectile.radius * 1.55, projectile.radius * 0.72, 0, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.fillStyle = projectile.color;
+      ctx.beginPath();
+      ctx.moveTo(-projectile.radius * 0.8, -projectile.radius * 0.35);
+      ctx.lineTo(projectile.radius * 0.28, -projectile.radius * 0.78);
+      ctx.lineTo(projectile.radius * 0.9, 0);
+      ctx.lineTo(projectile.radius * 0.1, projectile.radius * 0.86);
+      ctx.lineTo(-projectile.radius * 0.74, projectile.radius * 0.44);
+      ctx.closePath();
+      ctx.fill();
+      ctx.strokeStyle = "rgba(255, 210, 94, 0.9)";
+      ctx.lineWidth = 2.4;
+      ctx.beginPath();
+      ctx.moveTo(-projectile.radius * 1.75, -projectile.radius * 0.28);
+      ctx.lineTo(-projectile.radius * 0.35, -projectile.radius * 0.1);
+      ctx.moveTo(-projectile.radius * 1.4, projectile.radius * 0.35);
+      ctx.lineTo(-projectile.radius * 0.18, projectile.radius * 0.22);
+      ctx.stroke();
       ctx.restore();
       continue;
     }
