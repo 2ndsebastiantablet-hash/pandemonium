@@ -97,6 +97,14 @@ const CONFIG = {
   ciaFootSpeed: 2.35,
   ciaDamage: 19,
   ciaShotCooldown: 0.24,
+  ciaMaxAgents: 18,
+  ciaBackupCooldown: 5.4,
+  ciaCarSlamDamage: 28,
+  ciaNetSlowTime: 3.6,
+  ciaDartSlowTime: 4.8,
+  ciaMagPulseLifetime: 4.4,
+  ciaDroneLifetime: 10,
+  ciaJetpackLifetime: 20,
   ciaBossSpawnConsumed: 84,
   ciaBossSpawnKills: 16,
   ciaBossConsumedStep: 20,
@@ -238,6 +246,10 @@ const state = {
     ciaSpawnCooldown: 0,
     alienSpawnCooldown: 0,
     playerSlowFactor: 1,
+    playerWeakenFactor: 1,
+    playerNetTimer: 0,
+    playerDartTimer: 0,
+    controlScrambleTimer: 0,
     policeDeathsTotal: 0,
     policeBossSpawned: false,
     militaryDeathsTotal: 0,
@@ -436,9 +448,10 @@ function getDayNightState() {
 
 function getPlayerGrowthStats() {
   const size = state.player.absorbedHumans;
+  const weakenFactor = state.world.playerWeakenFactor || 1;
   return {
     maxHealth: 100 + size * 4 + Math.sqrt(size) * 10,
-    destruction: 1 + size * 0.12 + Math.sqrt(size + 1) * 0.45,
+    destruction: (1 + size * 0.12 + Math.sqrt(size + 1) * 0.45) * weakenFactor,
   };
 }
 
@@ -1757,7 +1770,7 @@ function desiredCIASquads() {
   if (size < 26) {
     return 0;
   }
-  return size >= 44 ? 2 : 1;
+  return Math.min(CONFIG.ciaMaxAgents, size >= 44 ? 6 + Math.floor((size - 44) / 8) : 3);
 }
 
 function desiredAlienCount() {
@@ -1773,6 +1786,9 @@ function countNpcsByType(type) {
 }
 
 function countSquadsByType(type) {
+  if (type === "cia") {
+    return state.world.npcs.filter((npc) => npc.type === "cia" && npc.alive).length;
+  }
   return new Set(state.world.npcs.filter((npc) => npc.type === type).map((npc) => npc.squadId)).size;
 }
 
@@ -1942,40 +1958,49 @@ function createAlienNpc(spawnPoint, rng) {
   };
 }
 
+function createCIANpc(spawnPoint, rng, options = {}) {
+  const inVehicle = options.inVehicle !== false;
+  return {
+    id: state.world.nextNpcId,
+    type: "cia",
+    x: spawnPoint.x,
+    y: spawnPoint.y,
+    vx: 0,
+    vy: 0,
+    radius: inVehicle ? 11 : 8,
+    homeChunkKey: spawnPoint.chunkKey,
+    targetX: state.player.x,
+    targetY: state.player.y,
+    timer: randomBetween(rng, 0.2, 1.6),
+    lastSeenTimer: 0,
+    shootCooldown: randomBetween(rng, 0.12, 0.42),
+    attackCooldown: randomBetween(rng, 0.8, 2.4),
+    backupCooldown: randomBetween(rng, 2.2, CONFIG.ciaBackupCooldown),
+    droneCooldown: randomBetween(rng, 2.8, 6.5),
+    robotCooldown: randomBetween(rng, 5.2, 9.5),
+    slamCooldown: randomBetween(rng, 1.2, 3.5),
+    slamTimer: 0,
+    burstShotsLeft: 0,
+    burstTimer: 0,
+    faceX: spawnPoint.roadType === "vertical" ? 0 : 1,
+    faceY: spawnPoint.roadType === "vertical" ? 1 : 0,
+    inVehicle,
+    activeCar: null,
+    carColor: "#111214",
+    alive: true,
+  };
+}
+
 function spawnCIASquadAt(x, y) {
   const chunk = getOrCreateChunkForPosition(x, y);
   if (!chunk) {
     return;
   }
   const rng = mulberry32(hash2d(Math.floor(x), Math.floor(y) + state.world.nextNpcId * 11));
-  const squadId = `cia-${state.world.nextNpcId}-${Math.floor(state.time * 10)}`;
-  const squadMode = rng() > 0.45 ? "driveBy" : "dismount";
-  const groupSize = 3 + (rng() > 0.7 ? 1 : 0);
+  const groupSize = 3;
   for (let index = 0; index < groupSize; index += 1) {
     const offset = (index - (groupSize - 1) * 0.5) * 26;
-    state.world.npcs.push({
-      id: state.world.nextNpcId,
-      type: "cia",
-      squadId,
-      squadMode,
-      x: x + offset,
-      y,
-      vx: 0,
-      vy: 0,
-      radius: 8,
-      homeChunkKey: chunk.key,
-      targetX: state.player.x,
-      targetY: state.player.y,
-      timer: 0,
-      lastSeenTimer: 0,
-      shootCooldown: randomBetween(rng, 0.1, 0.35),
-      faceX: 1,
-      faceY: 0,
-      inVehicle: true,
-      activeCar: null,
-      carColor: "#111214",
-      alive: true,
-    });
+    state.world.npcs.push(createCIANpc({ x: x + offset, y, chunkKey: chunk.key }, rng, { inVehicle: index !== 2 }));
     state.world.nextNpcId += 1;
   }
 }
@@ -2266,38 +2291,8 @@ function spawnCIASquad() {
   }
 
   const spawnPoint = spawnPool[randomInt(rng, 0, spawnPool.length - 1)];
-  const squadId = `cia-${state.world.nextNpcId}-${Math.floor(state.time * 10)}`;
-  const squadMode = rng() > 0.45 ? "driveBy" : "dismount";
-  const groupSize = 3 + (rng() > 0.7 ? 1 : 0);
-  for (let index = 0; index < groupSize; index += 1) {
-    const offset = (index - (groupSize - 1) * 0.5) * 26;
-    const offsetX = spawnPoint.roadType === "vertical" ? 0 : offset;
-    const offsetY = spawnPoint.roadType === "vertical" ? offset : 0;
-    state.world.npcs.push({
-      id: state.world.nextNpcId,
-      type: "cia",
-      squadId,
-      squadMode,
-      x: spawnPoint.x + offsetX,
-      y: spawnPoint.y + offsetY,
-      vx: 0,
-      vy: 0,
-      radius: 8,
-      homeChunkKey: spawnPoint.chunkKey,
-      targetX: state.player.x,
-      targetY: state.player.y,
-      timer: 0,
-      lastSeenTimer: 0,
-      shootCooldown: randomBetween(rng, 0.1, 0.35),
-      faceX: spawnPoint.roadType === "vertical" ? 0 : 1,
-      faceY: spawnPoint.roadType === "vertical" ? 1 : 0,
-      inVehicle: true,
-      activeCar: null,
-      carColor: "#111214",
-      alive: true,
-    });
-    state.world.nextNpcId += 1;
-  }
+  state.world.npcs.push(createCIANpc(spawnPoint, rng, { inVehicle: rng() > 0.24 }));
+  state.world.nextNpcId += 1;
   return true;
 }
 
@@ -2933,6 +2928,121 @@ function launchExplosive(npc, options) {
   });
 }
 
+function launchCIAUtilityProjectile(npc, kind, options = {}) {
+  const dx = state.player.x - npc.x;
+  const dy = state.player.y - npc.y;
+  const distance = Math.hypot(dx, dy) || 0.0001;
+  const jitter = options.jitter || 0;
+  const aimX = dx / distance + (Math.random() - 0.5) * jitter;
+  const aimY = dy / distance + (Math.random() - 0.5) * jitter;
+  const aimDistance = Math.hypot(aimX, aimY) || 0.0001;
+  npc.faceX = aimX / aimDistance;
+  npc.faceY = aimY / aimDistance;
+  state.world.projectiles.push({
+    kind,
+    x: npc.x + npc.faceX * (options.offset || (npc.inVehicle ? 20 : 10)),
+    y: npc.y + npc.faceY * (options.offset || (npc.inVehicle ? 20 : 10)),
+    vx: npc.faceX * (options.speed || 6),
+    vy: npc.faceY * (options.speed || 6),
+    life: options.life || 1.2,
+    radius: options.radius || 5,
+    blastRadius: options.blastRadius || 0,
+    damage: options.damage || 0,
+    color: options.color || "#ffffff",
+    ownerType: npc.type,
+  });
+}
+
+function applyCIASuppressorDart(x, y) {
+  state.world.playerDartTimer = Math.max(state.world.playerDartTimer || 0, CONFIG.ciaDartSlowTime);
+  state.world.controlScrambleTimer = Math.max(state.world.controlScrambleTimer || 0, CONFIG.ciaDartSlowTime * 0.82);
+  spawnVisualBurst(x, y, 38, "rgba(111, 174, 255, 0.55)");
+  damagePlayer(6, x, y, 0.34);
+}
+
+function spawnCIAMagPulse(npc) {
+  state.world.traps.push({
+    kind: "magPulse",
+    x: state.player.x + (Math.random() - 0.5) * 44,
+    y: state.player.y + (Math.random() - 0.5) * 44,
+    radius: 24,
+    life: CONFIG.ciaMagPulseLifetime,
+    maxLife: CONFIG.ciaMagPulseLifetime,
+    armedTimer: 0.15,
+    tickTimer: 0,
+  });
+}
+
+function spawnCIADrone(npc) {
+  if (countNpcsByType("ciaDrone") > 8) {
+    return;
+  }
+  state.world.npcs.push({
+    id: state.world.nextNpcId,
+    type: "ciaDrone",
+    x: npc.x,
+    y: npc.y,
+    vx: npc.faceX * 1.8,
+    vy: npc.faceY * 1.8,
+    radius: 7,
+    homeChunkKey: npc.homeChunkKey,
+    targetX: state.player.x,
+    targetY: state.player.y,
+    timer: CONFIG.ciaDroneLifetime,
+    faceX: npc.faceX || 1,
+    faceY: npc.faceY || 0,
+    alive: true,
+  });
+  state.world.nextNpcId += 1;
+}
+
+function spawnCIAJetpackRobot(npc) {
+  if (countNpcsByType("ciaJetpack") > 6) {
+    return;
+  }
+  state.world.npcs.push({
+    id: state.world.nextNpcId,
+    type: "ciaJetpack",
+    x: npc.x,
+    y: npc.y,
+    vx: npc.faceX * 0.8,
+    vy: npc.faceY * 0.8,
+    radius: 9,
+    homeChunkKey: npc.homeChunkKey,
+    targetX: state.player.x,
+    targetY: state.player.y,
+    timer: CONFIG.ciaJetpackLifetime,
+    shootCooldown: 0.35,
+    faceX: npc.faceX || 1,
+    faceY: npc.faceY || 0,
+    altitude: 78,
+    alive: true,
+  });
+  state.world.nextNpcId += 1;
+}
+
+function spawnCIABackupNear(npc) {
+  const fieldUnits = state.world.npcs.filter((other) => other.alive && ["cia", "ciaDrone", "ciaJetpack"].includes(other.type)).length;
+  const cap = CONFIG.ciaMaxAgents + Math.min(8, Math.floor(state.player.absorbedHumans / 12));
+  if (fieldUnits >= cap) {
+    return false;
+  }
+  const rng = mulberry32(hash2d(state.world.nextNpcId * 73, Math.floor(state.time * 21) + Math.floor(npc.x)));
+  const roadSpawns = getLoadedRoadSpawns(240);
+  const walkSpawns = getLoadedWalkSpawns(220);
+  const spawnPool = roadSpawns.length ? roadSpawns : walkSpawns;
+  const spawnPoint = spawnPool.length
+    ? spawnPool[randomInt(rng, 0, spawnPool.length - 1)]
+    : {
+        x: npc.x + randomBetween(rng, -160, 160),
+        y: npc.y + randomBetween(rng, -160, 160),
+        chunkKey: npc.homeChunkKey,
+      };
+  state.world.npcs.push(createCIANpc(spawnPoint, rng, { inVehicle: rng() > 0.42 }));
+  state.world.nextNpcId += 1;
+  return true;
+}
+
 function absorbNpc(npc) {
   if (npc.type === "civilian" && npc.inCar) {
     releaseNpcVehicle(npc, { carType: "civilianCar", color: npc.carColor });
@@ -3401,6 +3511,9 @@ function damageStructuresAroundCIASloth(npc, impactScale = 1) {
 }
 
 function chooseCIASlothRubbleTarget(npc) {
+  if (!state.world.rubble.some((piece) => distanceBetween(npc.x, npc.y, piece.x, piece.y) <= CONFIG.ciaSlothArmReach + 150)) {
+    return null;
+  }
   const playerDistance = distanceBetween(npc.x, npc.y, state.player.x, state.player.y);
   if (playerDistance < 780 || Math.random() > 0.58) {
     return { x: state.player.x, y: state.player.y };
@@ -3437,7 +3550,7 @@ function chooseCIASlothRubbleTarget(npc) {
 function consumeRubbleForCIASlothThrow(npc) {
   const rubble = state.world.rubble;
   if (!rubble.length) {
-    return "#6b5c4d";
+    return null;
   }
   const candidates = rubble
     .map((piece, index) => ({
@@ -3446,7 +3559,11 @@ function consumeRubbleForCIASlothThrow(npc) {
       color: piece.color,
     }))
     .sort((a, b) => a.distance - b.distance)
+    .filter((candidate) => candidate.distance <= CONFIG.ciaSlothArmReach + 150)
     .slice(0, Math.min(10, rubble.length));
+  if (!candidates.length) {
+    return null;
+  }
   candidates
     .slice()
     .sort((a, b) => b.index - a.index)
@@ -3501,6 +3618,11 @@ function launchCIASlothRubble(npc) {
   const dy = targetY - startY;
   const distance = Math.hypot(dx, dy) || 0.0001;
   const color = consumeRubbleForCIASlothThrow(npc);
+  if (!color) {
+    npc.rubbleHeld = false;
+    npc.rubbleCooldown = 1.4;
+    return;
+  }
 
   state.world.projectiles.push({
     kind: "slothRubble",
@@ -4919,16 +5041,20 @@ function updateCIASlothBoss(npc, dt) {
     launchCIASlothRubble(npc);
   } else if (!isBeaming && !heldNpc && !npc.holdingPlayer && npc.rubbleCooldown <= 0 && npc.rubbleChargeTimer <= 0) {
     const target = chooseCIASlothRubbleTarget(npc);
-    npc.rubbleTargetX = target.x;
-    npc.rubbleTargetY = target.y;
-    npc.rubbleChargeTimer = CONFIG.ciaSlothRubbleChargeTime;
-    npc.rubbleHeld = true;
-    npc.pickupCueX = target.x;
-    npc.pickupCueY = target.y;
-    npc.pickupCueTimer = 0.42;
-    npc.rubbleCooldown = CONFIG.ciaSlothRubbleCooldown;
-    isChargingRubble = true;
-    spawnVisualBurst(npc.x + (npc.faceX || 1) * 70 * scale, npc.y + (npc.faceY || 0) * 70 * scale, 24 * scale, "rgba(255, 151, 72, 0.45)");
+    if (!target) {
+      npc.rubbleCooldown = 1.6;
+    } else {
+      npc.rubbleTargetX = target.x;
+      npc.rubbleTargetY = target.y;
+      npc.rubbleChargeTimer = CONFIG.ciaSlothRubbleChargeTime;
+      npc.rubbleHeld = true;
+      npc.pickupCueX = target.x;
+      npc.pickupCueY = target.y;
+      npc.pickupCueTimer = 0.42;
+      npc.rubbleCooldown = CONFIG.ciaSlothRubbleCooldown;
+      isChargingRubble = true;
+      spawnVisualBurst(npc.x + (npc.faceX || 1) * 70 * scale, npc.y + (npc.faceY || 0) * 70 * scale, 24 * scale, "rgba(255, 151, 72, 0.45)");
+    }
   }
 
   const victim = findNearestVictimForCIASloth(npc, CONFIG.ciaSlothGrabRange, { includePlayer: true, anyNpc: true });
@@ -4998,51 +5124,86 @@ function updateCIASlothBoss(npc, dt) {
 }
 
 function updateCIA(npc, dt) {
-  const squad = getSquadMates("cia", npc.squadId);
-  if (squad.length < 2) {
-    npc.alive = false;
-    return;
-  }
-
-  const squadSpotted = squad.some((mate) => canSeePlayer(mate, CONFIG.ciaVision));
   const distance = distanceBetween(npc.x, npc.y, state.player.x, state.player.y);
   const touchingSwarm = getNpcSwarmContact(npc);
+  const spotted = canSeePlayer(npc, CONFIG.ciaVision);
 
   if (distance < getPlayerAbsorbRadius() + npc.radius) {
     absorbNpc(npc);
     return;
   }
 
-  if (squadSpotted) {
-    for (const mate of squad) {
-      mate.lastSeenTimer = 7;
-      mate.targetX = state.player.x;
-      mate.targetY = state.player.y;
-      if (mate.squadMode === "dismount" && mate.inVehicle && distanceBetween(mate.x, mate.y, state.player.x, state.player.y) < 280) {
-        releaseNpcVehicle(mate, { carType: "ciaCar", color: mate.carColor });
-        mate.inVehicle = false;
-        mate.radius = 8;
-      }
-    }
-    state.world.alert = clamp(state.world.alert + 42 * dt, 0, 100);
+  if (spotted) {
+    npc.lastSeenTimer = 7;
+    npc.targetX = state.player.x;
+    npc.targetY = state.player.y;
+    state.world.alert = clamp(state.world.alert + 34 * dt, 0, 100);
   } else {
     npc.lastSeenTimer = Math.max(0, npc.lastSeenTimer - dt);
   }
 
   npc.shootCooldown -= dt;
+  npc.attackCooldown = Math.max(0, (npc.attackCooldown || 0) - dt);
+  npc.backupCooldown = Math.max(0, (npc.backupCooldown || 0) - dt);
+  npc.droneCooldown = Math.max(0, (npc.droneCooldown || 0) - dt);
+  npc.robotCooldown = Math.max(0, (npc.robotCooldown || 0) - dt);
+  npc.slamCooldown = Math.max(0, (npc.slamCooldown || 0) - dt);
+  npc.slamTimer = Math.max(0, (npc.slamTimer || 0) - dt);
+  npc.burstTimer = Math.max(0, (npc.burstTimer || 0) - dt);
+
+  if ((spotted || npc.lastSeenTimer > 0) && npc.backupCooldown <= 0) {
+    spawnCIABackupNear(npc);
+    npc.backupCooldown = CONFIG.ciaBackupCooldown * randomBetween(Math.random, 0.62, 1.15);
+  }
+
   if (npc.inVehicle) {
     npc.radius = 11;
-    if ((squadSpotted || npc.lastSeenTimer > 0) && distance <= CONFIG.ciaCarRange && npc.shootCooldown <= 0) {
-      shootPlayer(npc, {
-        damage: CONFIG.ciaDamage,
-        color: "rgba(255, 244, 200, 1)",
-        width: 2.8,
-        life: 0.12,
-        push: 1.1,
-        jitter: 0.04,
-        muzzleDistance: 18,
-      });
-      npc.shootCooldown = CONFIG.ciaShotCooldown;
+    if ((spotted || npc.lastSeenTimer > 0) && distance < 300 && Math.random() < dt * 0.3) {
+      releaseNpcVehicle(npc, { carType: "ciaCar", color: npc.carColor });
+      npc.inVehicle = false;
+      npc.radius = 8;
+      npc.vx *= 0.45;
+      npc.vy *= 0.45;
+      return;
+    }
+
+    if ((spotted || npc.lastSeenTimer > 0) && npc.attackCooldown <= 0) {
+      const roll = Math.random();
+      if (roll < 0.28 && npc.slamCooldown <= 0) {
+        npc.slamTimer = 1.15;
+        npc.slamCooldown = 4.2;
+      } else if (roll < 0.5) {
+        launchCIAUtilityProjectile(npc, "ciaNet", { speed: 6.2, life: 1.05, radius: 8, color: "#8fd6ff", jitter: 0.05 });
+      } else if (roll < 0.72 && npc.droneCooldown <= 0) {
+        spawnCIADrone(npc);
+        npc.droneCooldown = 5.5 + Math.random() * 3;
+      } else if (npc.robotCooldown <= 0) {
+        spawnCIAJetpackRobot(npc);
+        npc.robotCooldown = 8 + Math.random() * 5;
+      } else {
+        shootPlayer(npc, {
+          damage: CONFIG.ciaDamage,
+          color: "rgba(255, 244, 200, 1)",
+          width: 2.8,
+          life: 0.12,
+          push: 1.1,
+          jitter: 0.04,
+          muzzleDistance: 18,
+        });
+      }
+      npc.attackCooldown = 1.0 + Math.random() * 1.1;
+    }
+
+    if (npc.slamTimer > 0) {
+      steerEntity(npc, state.player.x, state.player.y, 0.26, CONFIG.ciaCarSpeed * 2.25, dt);
+      if (distance <= state.player.radius + npc.radius + 16) {
+        damagePlayer(CONFIG.ciaCarSlamDamage, npc.x, npc.y, 2.6);
+        spawnVisualBurst(state.player.x, state.player.y, 34, "rgba(245, 245, 255, 0.58)");
+        npc.slamTimer = 0;
+        npc.vx *= -0.35;
+        npc.vy *= -0.35;
+      }
+      return;
     }
 
     if (touchingSwarm) {
@@ -5050,14 +5211,14 @@ function updateCIA(npc, dt) {
       npc.inVehicle = false;
       npc.radius = 8;
       dragNpcIntoSwarm(npc, touchingSwarm, dt);
-    } else if (squadSpotted || npc.lastSeenTimer > 0) {
-      if (distance > 170) {
-        steerEntity(npc, state.player.x, state.player.y, 0.13, CONFIG.ciaCarSpeed, dt);
+    } else if (spotted || npc.lastSeenTimer > 0) {
+      if (distance > 220) {
+        steerEntity(npc, state.player.x, state.player.y, 0.11, CONFIG.ciaCarSpeed * 1.12, dt);
       } else {
         const dx = npc.x - state.player.x;
         const dy = npc.y - state.player.y;
         const away = Math.hypot(dx, dy) || 0.0001;
-        steerEntity(npc, npc.x + (dx / away) * 150, npc.y + (dy / away) * 150, 0.1, CONFIG.ciaCarSpeed, dt);
+        steerEntity(npc, npc.x + (dx / away) * 150, npc.y + (dy / away) * 150, 0.12, CONFIG.ciaCarSpeed * 1.05, dt);
       }
     } else {
       npc.timer -= dt;
@@ -5073,21 +5234,48 @@ function updateCIA(npc, dt) {
   }
 
   npc.radius = 8;
-  if ((squadSpotted || npc.lastSeenTimer > 0) && distance <= CONFIG.ciaFootRange && npc.shootCooldown <= 0) {
-    shootPlayer(npc, {
-      damage: CONFIG.ciaDamage + 2,
-      color: "rgba(255, 240, 190, 1)",
-      width: 3,
-      life: 0.11,
-      push: 1.2,
-      jitter: 0.025,
+  if (npc.burstShotsLeft > 0 && npc.burstTimer <= 0) {
+    launchCIAUtilityProjectile(npc, "ciaBurstBomb", {
+      speed: 4.9,
+      life: 0.9,
+      radius: 5,
+      blastRadius: 66,
+      damage: 16,
+      color: "#ffe28a",
+      jitter: 0.08,
     });
-    npc.shootCooldown = CONFIG.ciaShotCooldown * 0.9;
+    npc.burstShotsLeft -= 1;
+    npc.burstTimer = 0.13;
+  } else if ((spotted || npc.lastSeenTimer > 0) && distance <= CONFIG.ciaFootRange && npc.attackCooldown <= 0) {
+    const roll = Math.random();
+    if (roll < 0.22) {
+      launchCIAUtilityProjectile(npc, "ciaDart", { speed: 8.3, life: 1.1, radius: 4, color: "#78aeff", jitter: 0.025 });
+    } else if (roll < 0.42) {
+      spawnCIAMagPulse(npc);
+    } else if (roll < 0.6) {
+      npc.burstShotsLeft = 5;
+      npc.burstTimer = 0;
+    } else if (roll < 0.72 && npc.robotCooldown <= 0) {
+      spawnCIAJetpackRobot(npc);
+      npc.robotCooldown = 8 + Math.random() * 5;
+    } else if (roll < 0.86) {
+      launchCIAUtilityProjectile(npc, "ciaNet", { speed: 6, life: 1.1, radius: 8, color: "#8fd6ff", jitter: 0.04 });
+    } else {
+      shootPlayer(npc, {
+        damage: CONFIG.ciaDamage + 2,
+        color: "rgba(255, 240, 190, 1)",
+        width: 3,
+        life: 0.11,
+        push: 1.2,
+        jitter: 0.025,
+      });
+    }
+    npc.attackCooldown = 1.05 + Math.random() * 1.2;
   }
 
   if (touchingSwarm) {
     dragNpcIntoSwarm(npc, touchingSwarm, dt);
-  } else if (squadSpotted || npc.lastSeenTimer > 0) {
+  } else if (spotted || npc.lastSeenTimer > 0) {
     if (distance > CONFIG.ciaFootRange * 0.55) {
       steerEntity(npc, state.player.x, state.player.y, 0.13, CONFIG.ciaFootSpeed, dt);
     } else {
@@ -5105,6 +5293,66 @@ function updateCIA(npc, dt) {
       npc.timer = 1.8 + Math.random() * 1.8;
     }
     steerEntity(npc, npc.targetX, npc.targetY, 0.06, CONFIG.ciaFootSpeed * 0.9, dt);
+  }
+}
+
+function updateCIADrone(npc, dt) {
+  npc.timer -= dt;
+  const dx = state.player.x - npc.x;
+  const dy = state.player.y - npc.y;
+  const distance = Math.hypot(dx, dy) || 0.0001;
+  npc.faceX = dx / distance;
+  npc.faceY = dy / distance;
+  npc.vx += npc.faceX * 0.22 * dt * 60;
+  npc.vy += npc.faceY * 0.22 * dt * 60;
+  const speed = Math.hypot(npc.vx, npc.vy);
+  if (speed > 5.2) {
+    npc.vx *= 5.2 / speed;
+    npc.vy *= 5.2 / speed;
+  }
+  npc.x += npc.vx;
+  npc.y += npc.vy;
+  if (distance <= state.player.radius + npc.radius + 4 || npc.timer <= 0) {
+    explodeAt(npc.x, npc.y, 58, 18, "#ffdd84");
+    spawnVisualBurst(npc.x, npc.y, 34, "rgba(255, 220, 122, 0.72)");
+    npc.alive = false;
+  }
+}
+
+function updateCIAJetpack(npc, dt) {
+  npc.timer -= dt;
+  const distance = distanceBetween(npc.x, npc.y, state.player.x, state.player.y);
+  if (distance < 120) {
+    const dx = npc.x - state.player.x;
+    const dy = npc.y - state.player.y;
+    const away = Math.hypot(dx, dy) || 0.0001;
+    steerEntity(npc, npc.x + (dx / away) * 180, npc.y + (dy / away) * 180, 0.16, 4.2, dt);
+  } else {
+    const angle = state.time * 1.8 + npc.id;
+    steerEntity(npc, state.player.x + Math.cos(angle) * 145, state.player.y + Math.sin(angle) * 95, 0.12, 3.6, dt);
+  }
+  const speed = Math.hypot(npc.vx, npc.vy);
+  if (speed > 0.02) {
+    npc.faceX = npc.vx / speed;
+    npc.faceY = npc.vy / speed;
+  }
+  npc.altitude = lerp(npc.altitude || 78, distance < 140 ? 104 : 82, 0.05);
+  npc.shootCooldown -= dt;
+  if (distance < 270 && npc.shootCooldown <= 0 && !lineOfSightBlocked(npc.x, npc.y, state.player.x, state.player.y)) {
+    shootPlayer(npc, {
+      damage: 6,
+      color: "rgba(135, 210, 255, 1)",
+      width: 2.3,
+      life: 0.1,
+      push: 0.42,
+      jitter: 0.05,
+      muzzleDistance: 10,
+    });
+    npc.shootCooldown = 0.34;
+  }
+  if (npc.timer <= 0 || distance < state.player.radius + npc.radius) {
+    npc.alive = false;
+    spawnVisualBurst(npc.x, npc.y, 20, "rgba(120, 190, 255, 0.44)");
   }
 }
 
@@ -5677,7 +5925,17 @@ function updateDebris(dt) {
 }
 
 function updateTraps(dt) {
+  state.world.playerNetTimer = Math.max(0, (state.world.playerNetTimer || 0) - dt);
+  state.world.playerDartTimer = Math.max(0, (state.world.playerDartTimer || 0) - dt);
+  state.world.controlScrambleTimer = Math.max(0, (state.world.controlScrambleTimer || 0) - dt);
   state.world.playerSlowFactor = 1;
+  state.world.playerWeakenFactor = state.world.playerDartTimer > 0 ? 0.48 : 1;
+  if (state.world.playerNetTimer > 0) {
+    state.world.playerSlowFactor = Math.min(state.world.playerSlowFactor, 0.38);
+  }
+  if (state.world.playerDartTimer > 0) {
+    state.world.playerSlowFactor = Math.min(state.world.playerSlowFactor, 0.32);
+  }
   for (let index = state.world.traps.length - 1; index >= 0; index -= 1) {
     const trap = state.world.traps[index];
     trap.life -= dt;
@@ -5707,6 +5965,22 @@ function updateTraps(dt) {
       }
       if (trap.triggered) {
         trap.strikeLife -= dt;
+      }
+    } else if (trap.kind === "magPulse") {
+      trap.radius = lerp(trap.radius || 24, 122, 0.06);
+      const dx = trap.x - state.player.x;
+      const dy = trap.y - state.player.y;
+      const distance = Math.hypot(dx, dy) || 0.0001;
+      if (distance <= trap.radius + state.player.radius) {
+        const pull = (1 - clamp(distance / trap.radius, 0, 1)) * 0.32 * dt * 60;
+        state.player.vx += (dx / distance) * pull;
+        state.player.vy += (dy / distance) * pull;
+        state.world.playerSlowFactor = Math.min(state.world.playerSlowFactor, 0.74);
+        trap.tickTimer -= dt;
+        if (trap.tickTimer <= 0) {
+          spawnVisualBurst(state.player.x, state.player.y, 8, "rgba(104, 178, 255, 0.32)");
+          trap.tickTimer = 0.28;
+        }
       }
     } else if (trap.armedTimer <= 0) {
       const hit = distanceBetween(trap.x, trap.y, state.player.x, state.player.y) <= trap.radius + state.player.radius;
@@ -5755,6 +6029,22 @@ function updateProjectiles(dt) {
       continue;
     }
 
+    if (projectile.kind === "ciaNet" || projectile.kind === "ciaDart") {
+      if (hitPlayer) {
+        if (projectile.kind === "ciaNet") {
+          state.world.playerNetTimer = Math.max(state.world.playerNetTimer || 0, CONFIG.ciaNetSlowTime);
+          spawnVisualBurst(projectile.x, projectile.y, 34, "rgba(143, 214, 255, 0.48)");
+          damagePlayer(3, projectile.x, projectile.y, 0.18);
+        } else {
+          applyCIASuppressorDart(projectile.x, projectile.y);
+        }
+        state.world.projectiles.splice(index, 1);
+      } else if (projectile.life <= 0 || hitBuilding) {
+        state.world.projectiles.splice(index, 1);
+      }
+      continue;
+    }
+
     if (projectile.kind === "slothRubble") {
       projectile.fireTrailTimer -= dt;
       if (projectile.fireTrailTimer <= 0) {
@@ -5767,6 +6057,14 @@ function updateProjectiles(dt) {
         damageWorldAtImpact(projectile.x, projectile.y, projectile.blastRadius, projectile.impact || 70, projectile.ownerId);
         spawnVisualBurst(projectile.x, projectile.y, projectile.blastRadius * 0.65, "rgba(255, 94, 34, 0.68)");
         state.world.ambientQuake = Math.max(state.world.ambientQuake, 0.72);
+        state.world.projectiles.splice(index, 1);
+      }
+      continue;
+    }
+
+    if (projectile.kind === "ciaBurstBomb") {
+      if (projectile.life <= 0 || hitBuilding || hitPlayer) {
+        explodeAt(projectile.x, projectile.y, projectile.blastRadius, projectile.damage, projectile.color);
         state.world.projectiles.splice(index, 1);
       }
       continue;
@@ -5835,6 +6133,10 @@ function updateNpcs(dt) {
       updateCIASkeleton(npc, dt);
     } else if (npc.type === "cia") {
       updateCIA(npc, dt);
+    } else if (npc.type === "ciaDrone") {
+      updateCIADrone(npc, dt);
+    } else if (npc.type === "ciaJetpack") {
+      updateCIAJetpack(npc, dt);
     } else if (npc.type === "alien") {
       updateAlien(npc, dt);
     } else {
@@ -5903,7 +6205,18 @@ function getPointerWorldTarget() {
   if (!state.pointer.active) {
     return { x: state.player.x, y: state.player.y };
   }
-  return screenToWorld(state.pointer.x, state.pointer.y);
+  const target = screenToWorld(state.pointer.x, state.pointer.y);
+  if ((state.world.controlScrambleTimer || 0) <= 0) {
+    return target;
+  }
+  const dx = target.x - state.player.x;
+  const dy = target.y - state.player.y;
+  const angle = Math.atan2(dy, dx) + Math.sin(state.time * 8.5) * 1.35 + Math.PI * 0.55;
+  const distance = Math.hypot(dx, dy);
+  return {
+    x: state.player.x + Math.cos(angle) * distance,
+    y: state.player.y + Math.sin(angle) * distance,
+  };
 }
 
 function getPlayerSpeedStats() {
@@ -6264,6 +6577,10 @@ function resetGame() {
   state.world.ciaSpawnCooldown = 0;
   state.world.alienSpawnCooldown = 0;
   state.world.playerSlowFactor = 1;
+  state.world.playerWeakenFactor = 1;
+  state.world.playerNetTimer = 0;
+  state.world.playerDartTimer = 0;
+  state.world.controlScrambleTimer = 0;
   state.world.policeDeathsTotal = 0;
   state.world.policeBossSpawned = false;
   state.world.militaryDeathsTotal = 0;
@@ -6341,6 +6658,8 @@ function updateHud() {
     countNpcsByType("ciaSkeleton") +
     countNpcsByType("ciaMiniBat") +
     countNpcsByType("ciaBatEye") +
+    countNpcsByType("ciaDrone") +
+    countNpcsByType("ciaJetpack") +
     (state.world.ciaWorm?.active || state.world.ciaWorm?.cutscene ? 1 : 0);
   const alienCount = countNpcsByType("alien");
   const dayNight = getDayNightState();
@@ -6985,6 +7304,51 @@ function drawNpc(npc) {
     ctx.stroke();
     ctx.fillStyle = "#111214";
     ctx.fillRect(handX + faceX * 6 - 2, handY + faceY * 6 - 2, 6, 4);
+  } else if (npc.type === "ciaDrone") {
+    ctx.fillStyle = "rgba(0, 0, 0, 0.16)";
+    ctx.beginPath();
+    ctx.ellipse(screen.x, screen.y + 5, 12, 5, 0, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.fillStyle = "#1b1f26";
+    ctx.beginPath();
+    ctx.arc(screen.x, screen.y - 8, 7, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.strokeStyle = "#7ec8ff";
+    ctx.lineWidth = 2;
+    ctx.beginPath();
+    ctx.moveTo(screen.x - 11, screen.y - 8);
+    ctx.lineTo(screen.x + 11, screen.y - 8);
+    ctx.moveTo(screen.x, screen.y - 19);
+    ctx.lineTo(screen.x, screen.y + 3);
+    ctx.stroke();
+    ctx.fillStyle = "#ffdf8a";
+    ctx.beginPath();
+    ctx.arc(screen.x + (npc.faceX || 1) * 5, screen.y - 8 + (npc.faceY || 0) * 5, 2.5, 0, Math.PI * 2);
+    ctx.fill();
+  } else if (npc.type === "ciaJetpack") {
+    const altitude = npc.altitude || 78;
+    const bodyY = screen.y - altitude * 0.32;
+    ctx.fillStyle = "rgba(0, 0, 0, 0.18)";
+    ctx.beginPath();
+    ctx.ellipse(screen.x, screen.y + altitude * 0.12, 13, 5, 0, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.fillStyle = "#202631";
+    ctx.fillRect(screen.x - 7, bodyY - 8, 14, 18);
+    ctx.fillStyle = "#91d8ff";
+    ctx.fillRect(screen.x - 4, bodyY - 5, 8, 6);
+    ctx.strokeStyle = "#14181f";
+    ctx.lineWidth = 3;
+    ctx.beginPath();
+    ctx.moveTo(screen.x - 9, bodyY - 2);
+    ctx.lineTo(screen.x - 18, bodyY + 8);
+    ctx.moveTo(screen.x + 9, bodyY - 2);
+    ctx.lineTo(screen.x + 18, bodyY + 8);
+    ctx.stroke();
+    ctx.fillStyle = "rgba(255, 143, 68, 0.8)";
+    ctx.beginPath();
+    ctx.ellipse(screen.x - 5, bodyY + 14, 3, 8, 0, 0, Math.PI * 2);
+    ctx.ellipse(screen.x + 5, bodyY + 14, 3, 8, 0, 0, Math.PI * 2);
+    ctx.fill();
   } else if (npc.type === "ciaBatBoss") {
     const altitude = npc.altitude || 120;
     const shadowY = screen.y + altitude * 0.14;
@@ -7026,15 +7390,9 @@ function drawNpc(npc) {
     ctx.beginPath();
     ctx.arc(screen.x + 31, bodyY - 19, 4.4, 0, Math.PI * 2);
     ctx.fill();
-    ctx.fillStyle = "rgba(255, 255, 255, 0.15)";
-    ctx.fillRect(screen.x - 34, bodyY - 66, 68, 5);
-    ctx.fillStyle = "#ff9c79";
-    ctx.fillRect(screen.x - 34, bodyY - 66, 68 * clamp(npc.health / npc.maxHealth, 0, 1), 5);
   } else if (npc.type === "ciaSlothBoss") {
     const faceX = npc.faceX || 1;
     const faceY = npc.faceY || 0;
-    const sideX = -faceY;
-    const sideY = faceX;
     const scale = npc.radius / 34;
     const bodyY = screen.y - (npc.altitude || 0) * 0.18;
     const clawing = (npc.clawTimer || 0) > 0;
@@ -7048,36 +7406,36 @@ function drawNpc(npc) {
       ctx.fill();
     }
     const swing = Math.sin(npc.armSwing * (clawing ? 8 : 1)) * (clawing ? 1.2 : 0.35);
-    const leftShoulderX = screen.x - sideX * 20 * scale;
-    const leftShoulderY = bodyY - sideY * 20 * scale - 14 * scale;
-    const rightShoulderX = screen.x + sideX * 20 * scale;
-    const rightShoulderY = bodyY + sideY * 20 * scale - 14 * scale;
+    const leftShoulderX = screen.x - 50 * scale;
+    const leftShoulderY = bodyY - 4 * scale;
+    const rightShoulderX = screen.x + 50 * scale;
+    const rightShoulderY = bodyY - 4 * scale;
     const defaultLeftHand = {
-      x: screen.x - sideX * 36 * scale + faceX * 18 * scale + swing * sideX * 12 * scale,
-      y: bodyY - sideY * 36 * scale - 8 * scale + swing * sideY * 12 * scale,
+      x: screen.x - 90 * scale + faceX * 18 * scale,
+      y: bodyY - 2 * scale + swing * 12 * scale,
     };
     const defaultRightHand = {
-      x: screen.x + sideX * 36 * scale + faceX * 18 * scale - swing * sideX * 12 * scale,
-      y: bodyY + sideY * 36 * scale - 8 * scale - swing * sideY * 12 * scale,
+      x: screen.x + 90 * scale + faceX * 18 * scale,
+      y: bodyY - 2 * scale - swing * 12 * scale,
     };
     if (rubbleReady) {
-      defaultLeftHand.x = screen.x - sideX * 28 * scale + faceX * 26 * scale;
-      defaultLeftHand.y = bodyY - sideY * 28 * scale - 48 * scale;
-      defaultRightHand.x = screen.x + sideX * 50 * scale + faceX * 28 * scale;
-      defaultRightHand.y = bodyY + sideY * 50 * scale - 118 * scale;
+      defaultLeftHand.x = screen.x - 74 * scale + faceX * 24 * scale;
+      defaultLeftHand.y = bodyY - 54 * scale;
+      defaultRightHand.x = screen.x + 86 * scale + faceX * 28 * scale;
+      defaultRightHand.y = bodyY - 118 * scale;
     }
     const cue = reaching && !rubbleReady ? worldToScreen(npc.pickupCueX, npc.pickupCueY) : null;
-    const leftHandX = cue ? cue.x - sideX * 20 * scale : defaultLeftHand.x;
-    const leftHandY = cue ? cue.y - sideY * 20 * scale - 8 * scale : defaultLeftHand.y;
-    const rightHandX = cue ? cue.x + sideX * 20 * scale : defaultRightHand.x;
-    const rightHandY = cue ? cue.y + sideY * 20 * scale - 8 * scale : defaultRightHand.y;
+    const leftHandX = cue ? cue.x - 28 * scale : defaultLeftHand.x;
+    const leftHandY = cue ? cue.y - 8 * scale : defaultLeftHand.y;
+    const rightHandX = cue ? cue.x + 28 * scale : defaultRightHand.x;
+    const rightHandY = cue ? cue.y - 8 * scale : defaultRightHand.y;
     const leftElbow = {
-      x: leftShoulderX - sideX * 70 * scale + faceX * (reaching ? 34 : 18) * scale,
-      y: leftShoulderY - sideY * 70 * scale + faceY * (reaching ? 34 : 18) * scale + 32 * scale,
+      x: leftShoulderX - 62 * scale + faceX * (reaching ? 34 : 18) * scale,
+      y: leftShoulderY + 42 * scale + faceY * (reaching ? 18 : 8) * scale,
     };
     const rightElbow = {
-      x: rightShoulderX + sideX * 70 * scale + faceX * (reaching ? 34 : 18) * scale,
-      y: rightShoulderY + sideY * 70 * scale + faceY * (reaching ? 34 : 18) * scale + 32 * scale,
+      x: rightShoulderX + 62 * scale + faceX * (reaching ? 34 : 18) * scale,
+      y: rightShoulderY + 42 * scale + faceY * (reaching ? 18 : 8) * scale,
     };
     const leftWrist = { x: lerp(leftElbow.x, leftHandX, 0.7), y: lerp(leftElbow.y, leftHandY, 0.7) };
     const rightWrist = { x: lerp(rightElbow.x, rightHandX, 0.7), y: lerp(rightElbow.y, rightHandY, 0.7) };
@@ -7494,6 +7852,30 @@ function drawProjectiles() {
       ctx.restore();
       continue;
     }
+    if (projectile.kind === "ciaNet" || projectile.kind === "ciaDart") {
+      const angle = Math.atan2(projectile.vy, projectile.vx);
+      ctx.save();
+      ctx.translate(screen.x, drawY);
+      ctx.rotate(angle);
+      if (projectile.kind === "ciaNet") {
+        ctx.strokeStyle = "#8fd6ff";
+        ctx.lineWidth = 1.5;
+        ctx.beginPath();
+        ctx.ellipse(0, 0, 10, 6, 0, 0, Math.PI * 2);
+        ctx.moveTo(-9, 0);
+        ctx.lineTo(9, 0);
+        ctx.moveTo(0, -6);
+        ctx.lineTo(0, 6);
+        ctx.stroke();
+      } else {
+        ctx.fillStyle = "#78aeff";
+        ctx.fillRect(-7, -1.5, 14, 3);
+        ctx.fillStyle = "#d8ecff";
+        ctx.fillRect(3, -2.5, 5, 5);
+      }
+      ctx.restore();
+      continue;
+    }
     if (projectile.kind === "slothRubble") {
       const angle = Math.atan2(projectile.vy, projectile.vx);
       ctx.save();
@@ -7521,6 +7903,17 @@ function drawProjectiles() {
       ctx.lineTo(-projectile.radius * 0.18, projectile.radius * 0.22);
       ctx.stroke();
       ctx.restore();
+      continue;
+    }
+    if (projectile.kind === "ciaBurstBomb") {
+      ctx.fillStyle = "rgba(255, 226, 138, 0.45)";
+      ctx.beginPath();
+      ctx.arc(screen.x, drawY, projectile.radius + 5, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.fillStyle = projectile.color;
+      ctx.beginPath();
+      ctx.arc(screen.x, drawY, projectile.radius, 0, Math.PI * 2);
+      ctx.fill();
       continue;
     }
     ctx.fillStyle = projectile.color;
@@ -7627,6 +8020,21 @@ function drawTraps() {
       ctx.beginPath();
       ctx.arc(screen.x, screen.y, 4, 0, Math.PI * 2);
       ctx.fill();
+    } else if (trap.kind === "magPulse") {
+      const alpha = clamp(trap.life / trap.maxLife, 0, 1);
+      ctx.strokeStyle = `rgba(104, 178, 255, ${(0.25 + alpha * 0.35).toFixed(3)})`;
+      ctx.lineWidth = 2.4;
+      ctx.beginPath();
+      ctx.arc(screen.x, screen.y, trap.radius, 0, Math.PI * 2);
+      ctx.stroke();
+      ctx.fillStyle = `rgba(70, 130, 220, ${(0.06 + alpha * 0.08).toFixed(3)})`;
+      ctx.beginPath();
+      ctx.arc(screen.x, screen.y, trap.radius, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.fillStyle = "#24384f";
+      ctx.beginPath();
+      ctx.arc(screen.x, screen.y, 7, 0, Math.PI * 2);
+      ctx.fill();
     } else {
       ctx.fillStyle = trap.kind === "teleportMine" ? "#7f6bff" : "#5f6168";
       ctx.beginPath();
@@ -7678,6 +8086,17 @@ function drawOverlay() {
   if (state.world.ciaWorm?.quake > 0.08) {
     ctx.fillStyle = `rgba(132, 88, 64, ${(state.world.ciaWorm.quake * 0.06).toFixed(3)})`;
     ctx.fillRect(0, 0, state.width, state.height);
+  }
+
+  if ((state.world.playerDartTimer || 0) > 0) {
+    const pulse = 0.5 + Math.sin(state.time * 14) * 0.5;
+    ctx.fillStyle = `rgba(76, 146, 255, ${(0.08 + pulse * 0.05).toFixed(3)})`;
+    ctx.fillRect(0, 0, state.width, state.height);
+    ctx.strokeStyle = "rgba(216, 236, 255, 0.24)";
+    ctx.lineWidth = 3;
+    ctx.beginPath();
+    ctx.arc(state.width * 0.5 + Math.sin(state.time * 9) * 18, state.height * 0.5, Math.max(state.width, state.height) * 0.36, 0, Math.PI * 2);
+    ctx.stroke();
   }
 
   const growthTint = clamp((state.player.absorbedHumans - 2) / 72, 0, 1);
