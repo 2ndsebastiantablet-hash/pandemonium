@@ -305,22 +305,31 @@ const SANDBOX_STRUCTURE_OPTIONS = [
   { id: "civilianCar", label: "Civilian Car" },
 ];
 
-const SANDBOX_ENEMY_OPTIONS = [
+const SANDBOX_ENEMY_DEFINITIONS = [
   { id: "police", label: "Police Officer" },
   { id: "policeSquad", label: "Police Squad" },
   { id: "policeBoss", label: "Police Mini Boss" },
   { id: "militarySoldier", label: "Army Soldier" },
   { id: "militaryGrenadier", label: "Grenade Soldier" },
-  { id: "militaryBoss", label: "Military Boss" },
   { id: "tank", label: "Tank" },
-  { id: "ciaSquad", label: "CIA Squad" },
+  { id: "militaryBoss", label: "Military Boss" },
+  { id: "ciaAgent", label: "CIA Agent" },
+  { id: "ciaCarAgent", label: "CIA Car Agent" },
+  { id: "ciaSquad", label: "CIA Agent Pack" },
+  { id: "ciaDrone", label: "CIA Drone" },
+  { id: "ciaJetpack", label: "CIA Jetpack Robot" },
+  { id: "ciaSkeleton", label: "CIA Skeleton" },
+  { id: "ciaMiniBat", label: "CIA Mini Bat" },
+  { id: "ciaBatEye", label: "CIA Bat Eye" },
   { id: "ciaBoss", label: "CIA Worm" },
-  { id: "ciaBatBoss", label: "CIA Bat" },
-  { id: "ciaSlothBoss", label: "CIA Sloth" },
+  { id: "ciaBatBoss", label: "CIA Bat Boss" },
+  { id: "ciaSlothBoss", label: "CIA Sloth Boss" },
   { id: "ciaDirectorBoss", label: "The Director" },
   { id: "alien", label: "Alien Ship" },
   { id: "alienWing", label: "Alien Wing" },
 ];
+
+const SANDBOX_ENEMY_OPTIONS = SANDBOX_ENEMY_DEFINITIONS.map(({ id, label }) => ({ id, label }));
 
 const CIA_MINI_BOSS_IDS = ["worm", "bat", "sloth"];
 
@@ -2121,6 +2130,18 @@ function spawnCIADirectorBoss() {
   return spawnCIADirectorBossAt(spawnPoint.x, spawnPoint.y);
 }
 
+function addSandboxNpc(npc) {
+  state.world.npcs.push(npc);
+  state.world.nextNpcId += 1;
+}
+
+function spawnSandboxGroup(count, x, y, spacing, callback) {
+  for (let index = 0; index < count; index += 1) {
+    const offset = index - (count - 1) * 0.5;
+    callback(index, x + offset * spacing, y - Math.abs(offset) * spacing * 0.25);
+  }
+}
+
 function spawnNextCIAMiniBoss() {
   const nextId = chooseNextCIAMiniBossId();
   if (!nextId) {
@@ -2152,16 +2173,14 @@ function spawnSandboxEnemy(id, x, y) {
   const rng = mulberry32(hash2d(Math.floor(x) + state.world.nextNpcId * 3, Math.floor(y) - state.world.nextNpcId * 5));
 
   if (id === "police") {
-    state.world.npcs.push(createPoliceNpc(spawnPoint, rng, { inVehicle: false }));
-    state.world.nextNpcId += 1;
+    addSandboxNpc(createPoliceNpc(spawnPoint, rng, { inVehicle: false }));
     return;
   }
 
   if (id === "policeSquad") {
-    for (let index = 0; index < 3; index += 1) {
-      state.world.npcs.push(createPoliceNpc({ ...spawnPoint, x: x + (index - 1) * 24 }, rng, { inVehicle: index === 0 }));
-      state.world.nextNpcId += 1;
-    }
+    spawnSandboxGroup(3, x, y, 24, (index, spawnX, spawnY) => {
+      addSandboxNpc(createPoliceNpc({ ...spawnPoint, x: spawnX, y: spawnY }, rng, { inVehicle: index === 0 }));
+    });
     return;
   }
 
@@ -2170,13 +2189,50 @@ function spawnSandboxEnemy(id, x, y) {
     return;
   }
 
+  if (["militarySoldier", "militaryGrenadier", "tank"].includes(id)) {
+    addSandboxNpc(createMilitaryNpc(id, spawnPoint, rng));
+    return;
+  }
+
   if (id === "militaryBoss") {
     spawnMilitaryBossAt(x, y);
     return;
   }
 
+  if (id === "ciaAgent" || id === "ciaCarAgent") {
+    addSandboxNpc(createCIANpc(spawnPoint, rng, { inVehicle: id === "ciaCarAgent" }));
+    return;
+  }
+
   if (id === "ciaSquad") {
-    spawnCIASquadAt(x, y);
+    spawnSandboxGroup(4, x, y, 28, (index, spawnX, spawnY) => {
+      addSandboxNpc(createCIANpc({ ...spawnPoint, x: spawnX, y: spawnY }, rng, { inVehicle: index % 2 === 0 }));
+    });
+    return;
+  }
+
+  if (id === "ciaDrone") {
+    spawnCIADrone({ ...spawnPoint, faceX: 1, faceY: 0, homeChunkKey: chunk.key });
+    return;
+  }
+
+  if (id === "ciaJetpack") {
+    spawnCIAJetpackRobot({ ...spawnPoint, faceX: 1, faceY: 0, homeChunkKey: chunk.key });
+    return;
+  }
+
+  if (id === "ciaSkeleton") {
+    addSandboxNpc(createCIASkeletonNpc(spawnPoint, rng));
+    return;
+  }
+
+  if (id === "ciaMiniBat") {
+    addSandboxNpc(createCIAMiniBatNpc(spawnPoint, rng));
+    return;
+  }
+
+  if (id === "ciaBatEye") {
+    addSandboxNpc(createCIABatEyeNpc(spawnPoint, rng, null));
     return;
   }
 
@@ -2200,24 +2256,15 @@ function spawnSandboxEnemy(id, x, y) {
     return;
   }
 
-  if (id === "alienWing") {
-    for (let index = 0; index < 3; index += 1) {
-      const alien = createAlienNpc({ ...spawnPoint, x: x + (index - 1) * 34, y: y - Math.abs(index - 1) * 12 }, rng);
-      state.world.npcs.push(alien);
-      state.world.nextNpcId += 1;
-    }
-    return;
-  }
-
   if (id === "alien") {
-    state.world.npcs.push(createAlienNpc(spawnPoint, rng));
-    state.world.nextNpcId += 1;
+    addSandboxNpc(createAlienNpc(spawnPoint, rng));
     return;
   }
 
-  if (["militarySoldier", "militaryGrenadier", "tank"].includes(id)) {
-    state.world.npcs.push(createMilitaryNpc(id, spawnPoint, rng));
-    state.world.nextNpcId += 1;
+  if (id === "alienWing") {
+    spawnSandboxGroup(3, x, y, 34, (index, spawnX, spawnY) => {
+      addSandboxNpc(createAlienNpc({ ...spawnPoint, x: spawnX, y: spawnY }, rng));
+    });
   }
 }
 
